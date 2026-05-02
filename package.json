@@ -1,0 +1,14 @@
+{
+  "name": "asklocal",
+  "version": "1.0.0",
+  "description": "Express server application",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "nodemon": "^3.1.14"
+  }
+}
