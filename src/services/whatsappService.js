@@ -47,6 +47,38 @@ const sendReply = async (recipientPhone, replyText) => {
   }
 };
 
+const buildPriceDropMessage = ({ productName, oldPrice, newPrice, url, currency = 'INR' }) => {
+  return (
+    `Price Drop Alert\n\n` +
+    `${productName}\n` +
+    `Now: ${currency} ${newPrice}\n` +
+    `Before: ${currency} ${oldPrice}\n\n` +
+    `Buy now: ${url}`
+  );
+};
+
+const buildTargetHitMessage = ({ productName, targetPrice, newPrice, url, currency = 'INR' }) => {
+  return (
+    `Target Hit Alert\n\n` +
+    `${productName}\n` +
+    `Current: ${currency} ${newPrice}\n` +
+    `Target: ${currency} ${targetPrice}\n\n` +
+    `Check deal: ${url}`
+  );
+};
+
+const buildPriceHeartbeatMessage = ({ productName, newPrice, url, currency = 'INR' }) => {
+  return (
+    `Price Update\n\n` +
+    `${productName}\n` +
+    `Current price: ${currency} ${newPrice}\n\n` +
+    `Link: ${url}`
+  );
+};
+
 module.exports = {
-  sendReply
+  sendReply,
+  buildPriceDropMessage,
+  buildTargetHitMessage,
+  buildPriceHeartbeatMessage
 };

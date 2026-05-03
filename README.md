@@ -1,6 +1,6 @@
 # Locaify - WhatsApp AI Search Bot
 
-A Node.js application that integrates WhatsApp messaging with AI-powered search using Tavily API.
+A Node.js application that integrates WhatsApp messaging with AI-powered search using Tavily API and automated price tracking.
 
 ## 📁 Project Structure
 
@@ -36,6 +36,8 @@ locaify/
 - **Location-Aware Search** - All searches scoped to India
 - **Auto-Replies** - Automatic message responses via WhatsApp
 - **Message Storage** - In-memory message history
+- **Price Tracking (MVP)** - Mongo-backed tracking for selected URLs
+- **Price Alerts** - WhatsApp alerts for price drops and target hits
 - **Clean Architecture** - Separated concerns (Controllers, Services, Routes)
 
 ## 🛠️ Setup
@@ -61,6 +63,14 @@ PORT=3000
 VERIFY_TOKEN=your_webhook_verify_token
 GENERAL_TOKEN=your_whatsapp_business_api_token
 TAVILY_API_KEY=your_tavily_api_key
+GROQ_API_KEY=your_groq_api_key
+MONGODB_URI=mongodb://127.0.0.1:27017/locaify
+TRACKING_CRON=0 */6 * * *
+TRACKING_MAX_TRACKS_PER_RUN=25
+TRACKING_REQUEST_TIMEOUT_MS=12000
+TRACKING_REQUEST_DELAY_MS=1000
+TRACKING_CURRENCY=INR
+TRACKING_BYPASS_PRICE_CHECK=false
 ```
 
 ## 📡 API Endpoints
@@ -73,6 +83,7 @@ TAVILY_API_KEY=your_tavily_api_key
 | GET | `/messages` | Get all received messages |
 | GET | `/latest` | Get latest message |
 | GET | `/search?q=query` | Search with location context |
+| GET | `/tracking/run` | Manually run one tracking cycle |
 
 ## 🏃 Running
 
@@ -109,7 +120,25 @@ Handle HTTP requests and coordinate between routes and services.
 2. `messageController.handleWebhook()` processes it
 3. Message stored in `receivedMessages` array
 4. `tavilyService.searchWithLocation()` performs search
-5. `whatsappService.sendReply()` sends reply back to user
+5. User can send `track 1`, `track 2`, or `track 3`
+6. Selected product is stored as an active tracking record in MongoDB
+7. Cron worker checks active records every 6 hours
+8. `whatsappService.sendReply()` sends price drop / target hit alerts
+
+## 💰 Price Tracking Flow
+
+1. Search product in WhatsApp
+2. Reply with `track 1` / `track 2` / `track 3`
+3. Choose duration:
+   - `1` => 3 days
+   - `2` => 7 days
+   - `3` => until first drop
+4. Set target price or reply `skip`
+5. Receive alerts when prices drop or target is hit
+
+Bypass mode for testing:
+- Set `TRACKING_BYPASS_PRICE_CHECK=true` to receive current price message every cron run.
+- Set `TRACKING_BYPASS_PRICE_CHECK=false` to send message only when price drops.
 
 ## 🌍 Location
 
@@ -121,6 +150,8 @@ Currently **hardcoded to India** for all searches. To modify:
 
 All configuration is centralized in `src/config/constants.js`:
 - API keys and tokens
+- MongoDB connection
+- Cron configuration for tracking checks
 - Phone number ID
 - Default location
 - Tavily search settings
