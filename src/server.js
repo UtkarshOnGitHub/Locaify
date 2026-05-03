@@ -1,7 +1,7 @@
-// Main Entry Point
+// Server Entry Point
 require('dotenv').config();
-const app = require('./src/app');
-const { PORT } = require('./src/config/constants');
+const app = require('./app');
+const { PORT } = require('./config/constants');
 
 // Start the server
 app.listen(PORT, () => {
