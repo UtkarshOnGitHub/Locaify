@@ -1,18 +1,12 @@
-// Groq LLM Service
 const axios = require('axios');
 const { GROQ_API_KEY, GROQ_CONFIG } = require('../config/constants');
 
 /**
- * Refine user query using Groq LLM for better search results
- * @param {string} userMessage - User's original message
- * @returns {Promise<string>} Refined query for Tavily
+ * Refine user query into a high-intent search query
  */
 const refineQuery = async (userMessage) => {
   try {
-    if (!GROQ_API_KEY) {
-      console.warn('⚠️  GROQ_API_KEY not set, using original message');
-      return userMessage;
-    }
+    if (!GROQ_API_KEY) return userMessage;
 
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
@@ -21,81 +15,86 @@ const refineQuery = async (userMessage) => {
         messages: [
           {
             role: 'system',
-            content: 'You are a helpful assistant that refines user queries into clear, concise search queries. Keep the refined query to one sentence. Return ONLY the refined query, nothing else.'
+            content: `
+You convert user input into a high-quality Google search query.
+
+Rules:
+- One short sentence only
+- No explanation
+- Include "India" if relevant
+- Add intent (best, price, near me, etc.)
+- Remove unnecessary words
+`
           },
           {
             role: 'user',
-            content: `Refine this query for a web search in India: "${userMessage}"`
+            content: userMessage
           }
         ],
-        temperature: GROQ_CONFIG.temperature,
-        max_tokens: GROQ_CONFIG.max_tokens
+        temperature: 0.2,
+        max_tokens: 50
       },
       {
         headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          Authorization: `Bearer ${GROQ_API_KEY}`,
           'Content-Type': 'application/json'
         }
       }
     );
 
-    const refinedQuery = response.data.choices[0].message.content.trim();
-    console.log(`📝 Refined Query: "${refinedQuery}"`);
-    return refinedQuery;
+    return response?.data?.choices?.[0]?.message?.content?.trim() || userMessage;
   } catch (error) {
-    console.error('❌ Query refinement error:', error.message);
-    return userMessage; // Fallback to original query
+    console.error('❌ refineQuery error:', error.message);
+    return userMessage;
   }
 };
 
 /**
- * Format Tavily search results into a nice WhatsApp message
- * @param {string} originalQuery - Original user message
- * @param {string} refinedQuery - Refined query sent to Tavily
- * @param {Object} tavilyResults - Results from Tavily API
- * @returns {Promise<string>} Formatted message for WhatsApp
+ * Format Tavily results into CLEAN WhatsApp output
  */
 const formatSearchResults = async (originalQuery, refinedQuery, tavilyResults) => {
   try {
-    if (!tavilyResults || !tavilyResults.results || tavilyResults.results.length === 0) {
-      return `🤔 No results found for "${originalQuery}". Try rephrasing your question.`;
+    if (!tavilyResults?.results?.length) {
+      return `❌ No results found for "${originalQuery}". Try a different query.`;
     }
 
-    const results = tavilyResults.results.slice(0, 3); // Top 3 results
-    
-    let message = `🔍 *Search Results*\n`;
-    message += `• User question: ${originalQuery}\n`;
-    message += `• Refined query: ${refinedQuery}\n\n`;
-    
-    results.forEach((result, index) => {
-      message += `*${index + 1}. ${result.title || 'Untitled'}*\n`;
-      message += `${result.content || 'No description available'}\n`;
-      message += `🔗 Source: ${result.url || 'N/A'}\n\n`;
+    const results = tavilyResults.results.slice(0, 3);
+
+    // Clean + structured formatting
+    let message = `🔍 *Results for:* ${originalQuery}\n\n`;
+
+    results.forEach((r, i) => {
+      const title = r.title?.trim() || 'No title';
+      const desc = (r.content || '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 120); // trim noise
+
+      message += `*${i + 1}. ${title}*\n`;
+      message += `📄 ${desc}...\n`;
+      message += `🔗 ${r.url}\n\n`;
     });
 
-    // Add summary using Groq if available
-    if (GROQ_API_KEY && results.length > 0) {
-      message += await generateSummary(refinedQuery, results);
-    }
+    // Add summary
+    const summary = await generateSummary(originalQuery, results);
+    if (summary) message += summary;
 
-    return message;
+    return message.trim();
   } catch (error) {
-    console.error('❌ Format results error:', error.message);
-    return 'An error occurred while formatting results.';
+    console.error('❌ formatSearchResults error:', error.message);
+    return '⚠️ Error formatting results.';
   }
 };
 
 /**
- * Generate a summary of search results using Groq
- * @param {string} query - Original query
- * @param {Array} results - Search results
- * @returns {Promise<string>} Summary message
+ * Generate ULTRA CLEAN bullet summary
  */
 const generateSummary = async (query, results) => {
   try {
-    const resultsText = results
-      .map((r, i) => `Result ${i + 1}: ${r.title}\n${r.content}`)
-      .join('\n\n');
+    if (!GROQ_API_KEY) return '';
+
+    const compactResults = results
+      .map((r) => `${r.title}: ${r.content}`)
+      .join('\n');
 
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
@@ -104,28 +103,41 @@ const generateSummary = async (query, results) => {
         messages: [
           {
             role: 'system',
-            content: 'You are a helpful assistant that creates concise summaries of search results. Keep summaries brief and relevant. Use bullet points.'
+            content: `
+You summarize search results into SHORT bullet points.
+
+Rules:
+- Max 4 bullets
+- Each bullet < 12 words
+- No intro text
+- No conclusion
+- No repetition
+- Focus only on useful insights
+`
           },
           {
             role: 'user',
-            content: `Summarize the key information from these search results about "${query}":\n\n${resultsText}`
+            content: `Query: ${query}\n\nResults:\n${compactResults}`
           }
         ],
-        temperature: 0.3,
-        max_tokens: 300
+        temperature: 0.2,
+        max_tokens: 120
       },
       {
         headers: {
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          Authorization: `Bearer ${GROQ_API_KEY}`,
           'Content-Type': 'application/json'
         }
       }
     );
 
-    const summary = response.data.choices[0].message.content.trim();
-    return `*📌 Summary:*\n${summary}`;
+    const summary = response?.data?.choices?.[0]?.message?.content?.trim();
+
+    if (!summary) return '';
+
+    return `📌 *Key Insights:*\n${summary}`;
   } catch (error) {
-    console.error('❌ Summary generation error:', error.message);
+    console.error('❌ summary error:', error.message);
     return '';
   }
 };
