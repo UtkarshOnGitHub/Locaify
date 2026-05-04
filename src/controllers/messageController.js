@@ -57,11 +57,9 @@ const buildDurationPrompt = (result) => {
 };
 
 const buildSearchFooter = () => (
-  'Do you want to track prices for a product from these results?\n\n' +
-  'Reply with:\n' +
-  '- track 1\n' +
-  '- track 2\n' +
-  '- track 3'
+  'Choose a product to track from the top search results.\n' +
+  'Tap a button for Product 1, Product 2, or Product 3.\n' +
+  'Or reply with track 1, track 2, or track 3.'
 );
 
 /**
@@ -151,7 +149,27 @@ const handleWebhook = async (req, res) => {
             // 🔘 HANDLE INTERACTIVE BUTTON CLICKS
             if (messageType.startsWith('interactive_button')) {
               const buttonId = messageType.match(/\[(.*?)\]/)[1];
-              
+
+              if (buttonId?.startsWith('track_')) {
+                const index = Number(buttonId.split('_')[1]) - 1;
+                const chosen = cachedResults[index];
+
+                if (!chosen) {
+                  await sendReply(fromPhone, 'No recent results found to track. Please search again.');
+                  return;
+                }
+
+                trackSessions.set(fromPhone, {
+                  state: 'awaiting_duration',
+                  productName: chosen.title || 'Tracked Product',
+                  url: chosen.url,
+                  basePrice: extractPriceFromResult(chosen)
+                });
+
+                await sendReply(fromPhone, buildDurationPrompt(chosen));
+                return;
+              }
+
               if (buttonId === 'search_again') {
                 await sendReply(fromPhone, '🔍 Starting a new search...\n\nWhat would you like to search for?');
                 return;
@@ -165,7 +183,7 @@ const handleWebhook = async (req, res) => {
                     .slice(3, 6)
                     .map((r, i) => `${i + 4}. ${r.title}\n💰 ${r.price || 'Price N/A'}\n🔗 ${r.url}`)
                     .join('\n\n');
-                  
+
                   if (moreResults) {
                     await sendReply(fromPhone, `Here are more results:\n\n${moreResults}`);
                   } else {
@@ -262,26 +280,6 @@ const handleWebhook = async (req, res) => {
               return;
             }
 
-            if (trackMatch) {
-              const requestedIndex = trackMatch[1] ? Number(trackMatch[1]) - 1 : 0;
-              const chosen = cachedResults[requestedIndex];
-
-              if (!chosen) {
-                await sendReply(fromPhone, 'No recent results found to track. Search first, then reply "track 1".');
-                return;
-              }
-
-              trackSessions.set(fromPhone, {
-                state: 'awaiting_duration',
-                productName: chosen.title || 'Tracked Product',
-                url: chosen.url,
-                basePrice: extractPriceFromResult(chosen)
-              });
-
-              await sendReply(fromPhone, buildDurationPrompt(chosen));
-              return;
-            }
-
             // 🤖 AI-POWERED SEARCH: REFINE QUERY AND SEARCH
             console.log('\n🔄 Processing message with AI...');
 
@@ -290,18 +288,27 @@ const handleWebhook = async (req, res) => {
             const formattedResponse = await formatSearchResults(messageText, refinedQuery, searchResults);
 
             if (searchResults?.results?.length) {
-              userSearchCache.set(fromPhone, searchResults.results.slice(0, 3));
+              userSearchCache.set(fromPhone, searchResults.results);
             }
 
-            // Create action buttons for interactive response
-            const actionButtons = [
-              { id: 'search_again', title: '🔍 Search Again' },
-              { id: 'refine_search', title: '📝 Refine Search' },
-              { id: 'show_more', title: '➕ More Results' }
-            ];
+            const topOptions = (searchResults?.results || []).slice(0, 3);
+            const trackListText = topOptions
+              .map((item, idx) => `${idx + 1}) ${item.title || item.url || 'Product'}`)
+              .join('\n');
 
-            // Send search results with interactive buttons
-            await sendReply(fromPhone, formattedResponse, actionButtons);
+            const responseText = (
+              `${formattedResponse}\n\n` +
+              'Select a product to track:\n' +
+              `${trackListText}\n\n` +
+              'Tap a button for the product number you want to track, or reply "track 1".'
+            );
+
+            const actionButtons = topOptions.map((item, index) => ({
+              id: `track_${index + 1}`,
+              title: `Track ${index + 1}`
+            }));
+
+            await sendReply(fromPhone, responseText, actionButtons);
           });
         });
       });
