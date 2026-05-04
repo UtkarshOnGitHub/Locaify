@@ -1,6 +1,6 @@
 // Message Controller
 const Message = require('../models/Message');
-const { sendReply } = require('../services/whatsappService');
+const { sendReply, sendSearchResultsWithButtons, buildQuickReplyButtons } = require('../services/whatsappService');
 const { getLocation } = require('../services/locationService');
 const { searchWithLocation } = require('../services/tavilyService');
 const { refineQuery, formatSearchResults } = require('../services/groqService');
@@ -109,14 +109,30 @@ const handleWebhook = async (req, res) => {
           // Extract each message
           messages.forEach(async (message) => {
             const fromPhone = message.from;
-            const messageText = (message.text?.body || 'Non-text message').trim();
+            
+            // Handle both text and button click messages
+            let messageText = '';
+            let messageType = message.type;
+            
+            if (message.type === 'text') {
+              messageText = (message.text?.body || 'Non-text message').trim();
+            } else if (message.type === 'interactive') {
+              // Handle button click response
+              const buttonId = message.interactive?.button_reply?.id;
+              const buttonTitle = message.interactive?.button_reply?.title;
+              messageText = buttonTitle || buttonId || 'Interactive button clicked';
+              messageType = `interactive_button[${buttonId}]`;
+              console.log(`🔘 Button clicked: ${buttonTitle} (${buttonId})`);
+            } else {
+              messageText = `Non-text message (type: ${message.type})`;
+            }
 
             // Create message object
             const messageData = new Message({
               from: fromPhone,
               messageId: message.id,
               messageBody: messageText,
-              messageType: message.type
+              messageType: messageType
             });
 
             // Store in array
@@ -126,12 +142,64 @@ const handleWebhook = async (req, res) => {
             console.log('\n✅ EXTRACTED MESSAGE:');
             console.log(`   From: ${fromPhone}`);
             console.log(`   Message: ${messageText}`);
-            console.log(`   Type: ${message.type}`);
+            console.log(`   Type: ${messageType}`);
 
             const activeSession = trackSessions.get(fromPhone);
             const trackMatch = messageText.match(TRACK_COMMAND_REGEX);
             const cachedResults = userSearchCache.get(fromPhone) || [];
 
+            // 🔘 HANDLE INTERACTIVE BUTTON CLICKS
+            if (messageType.startsWith('interactive_button')) {
+              const buttonId = messageType.match(/\[(.*?)\]/)[1];
+              
+              if (buttonId === 'search_again') {
+                await sendReply(fromPhone, '🔍 Starting a new search...\n\nWhat would you like to search for?');
+                return;
+              } else if (buttonId === 'refine_search') {
+                await sendReply(fromPhone, '📝 How would you like to refine your search?\n\nTell me what to focus on.');
+                return;
+              } else if (buttonId === 'show_more') {
+                const results = userSearchCache.get(fromPhone) || [];
+                if (results.length > 0) {
+                  const moreResults = results
+                    .slice(3, 6)
+                    .map((r, i) => `${i + 4}. ${r.title}\n💰 ${r.price || 'Price N/A'}\n🔗 ${r.url}`)
+                    .join('\n\n');
+                  
+                  if (moreResults) {
+                    await sendReply(fromPhone, `Here are more results:\n\n${moreResults}`);
+                  } else {
+                    await sendReply(fromPhone, 'No more results available. Try a new search!');
+                  }
+                } else {
+                  await sendReply(fromPhone, 'No cached results. Start with a new search.');
+                }
+                return;
+              }
+            }
+
+            // Track command handling (track 1, track 2, etc.)
+            if (trackMatch) {
+              const requestedIndex = trackMatch[1] ? Number(trackMatch[1]) - 1 : 0;
+              const chosen = cachedResults[requestedIndex];
+
+              if (!chosen) {
+                await sendReply(fromPhone, 'No recent results found to track. Search first, then reply "track 1".');
+                return;
+              }
+
+              trackSessions.set(fromPhone, {
+                state: 'awaiting_duration',
+                productName: chosen.title || 'Tracked Product',
+                url: chosen.url,
+                basePrice: extractPriceFromResult(chosen)
+              });
+
+              await sendReply(fromPhone, buildDurationPrompt(chosen));
+              return;
+            }
+
+            // Handle tracking session states
             if (activeSession?.state === 'awaiting_duration') {
               const parsed = parseDurationChoice(messageText);
               if (!parsed) {
@@ -225,7 +293,15 @@ const handleWebhook = async (req, res) => {
               userSearchCache.set(fromPhone, searchResults.results.slice(0, 3));
             }
 
-            await sendReply(fromPhone, `${formattedResponse}\n\n${buildSearchFooter()}`);
+            // Create action buttons for interactive response
+            const actionButtons = [
+              { id: 'search_again', title: '🔍 Search Again' },
+              { id: 'refine_search', title: '📝 Refine Search' },
+              { id: 'show_more', title: '➕ More Results' }
+            ];
+
+            // Send search results with interactive buttons
+            await sendReply(fromPhone, formattedResponse, actionButtons);
           });
         });
       });
