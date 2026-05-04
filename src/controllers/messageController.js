@@ -30,6 +30,8 @@ const formatMessage = ({ title, body }) => {
 const receivedMessages = [];
 const userSearchCache = new Map();
 const trackSessions = new Map();
+const processedMessageIds = new Set();
+const MAX_PROCESSED_MESSAGE_IDS = 1000;
 
 const TRACK_COMMAND_REGEX = /^track(?:\s+this)?(?:\s+([1-3]))?$/i;
 
@@ -66,6 +68,16 @@ const parseCurrencyNumber = (text) => {
   const cleaned = text.replace(/[^\d.]/g, '');
   const value = Number(cleaned);
   return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+};
+
+const rememberProcessedMessage = (messageId) => {
+  if (!messageId) return;
+
+  processedMessageIds.add(messageId);
+  if (processedMessageIds.size <= MAX_PROCESSED_MESSAGE_IDS) return;
+
+  const oldestMessageId = processedMessageIds.values().next().value;
+  processedMessageIds.delete(oldestMessageId);
 };
 
 const extractPriceFromResult = (result) => {
@@ -111,25 +123,50 @@ const buildCancelledMessage = () => {
 
 // ================= WEBHOOK =================
 const handleWebhook = async (req, res) => {
+  if (req.body?.object !== 'whatsapp_business_account') {
+    return res.status(200).end();
+  }
+
+  // Meta retries webhooks when the endpoint does not acknowledge quickly.
+  // Acknowledge first, then process so retries do not create duplicate replies.
+  res.status(200).end();
+
   try {
     const body = req.body;
 
-    if (body.object === 'whatsapp_business_account') {
-      const entries = body.entry || [];
+    const entries = body.entry || [];
 
-      for (const entry of entries) {
-        for (const change of entry.changes || []) {
-          const messages = change.value?.messages || [];
+    for (const entry of entries) {
+      for (const change of entry.changes || []) {
+        const messages = change.value?.messages || [];
 
-          for (const message of messages) {
-            const fromPhone = message.from;
+        for (const message of messages) {
+          if (message.id && processedMessageIds.has(message.id)) {
+            console.log(`Skipping duplicate webhook message: ${message.id}`);
+            continue;
+          }
+          rememberProcessedMessage(message.id);
 
-            let messageText = '';
-            if (message.type === 'text') {
-              messageText = (message.text?.body || '').trim();
-            } else if (message.type === 'interactive') {
-              messageText = message.interactive?.button_reply?.title || '';
-            }
+          const fromPhone = message.from;
+
+          let messageText = '';
+          if (message.type === 'text') {
+            messageText = (message.text?.body || '').trim();
+          } else if (message.type === 'interactive') {
+            messageText = message.interactive?.button_reply?.title || '';
+          }
+
+          if (!fromPhone || !messageText) {
+            continue;
+          }
+
+          receivedMessages.push(new Message({
+            messageId: message.id,
+            messageBody: messageText,
+            messageType: message.type,
+            from: fromPhone,
+            timestamp: new Date()
+          }));
 
             const normalizedText = normalizeText(messageText);
 
@@ -143,7 +180,7 @@ const handleWebhook = async (req, res) => {
                 buildCancelledMessage(),
                 buildButtons(['New search'])
               );
-              return;
+              continue;
             }
 
             const activeSession = trackSessions.get(fromPhone);
@@ -164,7 +201,7 @@ const handleWebhook = async (req, res) => {
                 }),
                 buildButtons(['New search'])
               );
-                return;
+                continue;
               }
 
               trackSessions.set(fromPhone, {
@@ -176,7 +213,7 @@ const handleWebhook = async (req, res) => {
               });
 
               await sendReply(fromPhone, buildProductInsightMessage(chosen), buildProductActionButtons());
-              return;
+              continue;
             }
 
             // ================= ACTION SELECTION =================
@@ -190,7 +227,7 @@ const handleWebhook = async (req, res) => {
                 });
 
                 await sendReply(fromPhone, buildDurationPrompt(activeSession.product), buildButtons(['3 days', '7 days', 'Until price drops']));
-                return;
+                continue;
               }
 
               if (normalized.includes('set target')) {
@@ -200,13 +237,13 @@ const handleWebhook = async (req, res) => {
                 });
 
                 await sendReply(fromPhone, buildTargetPrompt(), buildButtons(['Skip']));
-                return;
+                continue;
               }
 
               if (normalized === 'cancel') {
                 trackSessions.delete(fromPhone);
                 await sendReply(fromPhone, buildCancelledMessage());
-                return;
+                continue;
               }
 
               await sendReply(fromPhone,
@@ -216,7 +253,7 @@ const handleWebhook = async (req, res) => {
                 }),
                 buildButtons(['Start Tracking', 'Set Target Price', 'Cancel'])
               );
-              return;
+              continue;
             }
 
             // ================= DURATION =================
@@ -231,7 +268,7 @@ const handleWebhook = async (req, res) => {
                   }),
                   buildButtons(['3 days', '7 days', 'Until price drops'])
                 );
-                return;
+                continue;
               }
 
               trackSessions.set(fromPhone, {
@@ -247,7 +284,7 @@ const handleWebhook = async (req, res) => {
                 }),
                 buildButtons(['Skip'])
               );
-              return;
+              continue;
             }
 
             // ================= TARGET =================
@@ -264,7 +301,7 @@ const handleWebhook = async (req, res) => {
                   }),
                   buildButtons(['Skip'])
                 );
-                return;
+                continue;
               }
 
               await TrackedProduct.findOneAndUpdate(
@@ -289,7 +326,7 @@ const handleWebhook = async (req, res) => {
                 }),
                 buildButtons(['View tracked items', 'New search'])
               );
-              return;
+              continue;
             }
 
             // ================= SEARCH =================
@@ -316,15 +353,12 @@ const handleWebhook = async (req, res) => {
             }));
 
             await sendReply(fromPhone, messageOut, trackButtons);
-          }
         }
       }
     }
   } catch (err) {
     console.error(err);
   }
-
-  res.status(200).end();
 };
 
 const verifyWebhook = (req, res, verifyToken) => {
