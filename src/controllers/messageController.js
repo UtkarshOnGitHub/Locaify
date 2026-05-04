@@ -11,15 +11,17 @@ const buildFooter = () => {
   return '\n──────────────\n⚙️ Reply STOP to cancel tracking';
 };
 
-const buildOptions = (options = []) => {
-  return options.map((opt, i) => `${i + 1}️⃣ ${opt}`).join('\n');
+const buildButtons = (options = []) => {
+  return options.slice(0, 3).map((option, index) => ({
+    id: `opt_${index + 1}`,
+    title: option.substring(0, 20)
+  }));
 };
 
-const formatMessage = ({ title, body, options = [] }) => {
+const formatMessage = ({ title, body }) => {
   return (
     `${title ? `🔥 *${title}*\n\n` : ''}` +
-    `${body}\n\n` +
-    `${options.length ? '👉 Choose an option:\n' + buildOptions(options) : ''}` +
+    `${body}` +
     buildFooter()
   );
 };
@@ -32,12 +34,29 @@ const trackSessions = new Map();
 const TRACK_COMMAND_REGEX = /^track(?:\s+this)?(?:\s+([1-3]))?$/i;
 
 // ================= HELPERS =================
-const parseDurationChoice = (text) => {
-  const normalized = (text || '').trim().toLowerCase();
+const normalizeText = (text) => {
+  if (!text) return '';
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\u0000-\u007F]+/g, ' ') // strip emoji/non-ascii
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
 
-  if (['1', '3 days'].includes(normalized)) return { trackingMode: 'duration', days: 3 };
-  if (['2', '7 days'].includes(normalized)) return { trackingMode: 'duration', days: 7 };
-  if (['3', 'until drop'].includes(normalized)) return { trackingMode: 'until_drop', days: null };
+const parseDurationChoice = (text) => {
+  const normalized = normalizeText(text);
+
+  if (/\b(1|one|3|three)\b/.test(normalized) || normalized.includes('3 days') || normalized.includes('three days')) {
+    return { trackingMode: 'duration', days: 3 };
+  }
+  if (/\b(2|two|7|seven)\b/.test(normalized) || normalized.includes('7 days') || normalized.includes('seven days')) {
+    return { trackingMode: 'duration', days: 7 };
+  }
+  if (normalized.includes('until drop') || normalized.includes('until price drops') || normalized.includes('until dropped')) {
+    return { trackingMode: 'until_drop', days: null };
+  }
 
   return null;
 };
@@ -59,8 +78,34 @@ const extractPriceFromResult = (result) => {
 const buildDurationPrompt = (result) => {
   return formatMessage({
     title: 'Tracking Setup',
-    body: `📦 ${result.title}\n\nHow long should I track this?`,
-    options: ['3 days', '7 days', 'Until price drops']
+    body: `📦 ${result.title}\n\nHow long should I track this?`
+  });
+};
+
+const buildProductInsightMessage = (product) => {
+  return formatMessage({
+    title: 'Price Insight',
+    body: `🎧 ${product.title || product.url}\n💰 ${product.price || '₹ N/A'}\n\nI can track it for you and notify you instantly when it hits a better price.`
+  });
+};
+
+const buildProductActionButtons = () => ([
+  { id: 'start_tracking', title: 'Start Tracking' },
+  { id: 'set_target_price', title: 'Set Target Price' },
+  { id: 'cancel', title: 'Cancel' }
+]);
+
+const buildTargetPrompt = () => {
+  return formatMessage({
+    title: 'Target Price',
+    body: 'Send your desired price in INR or reply Skip.'
+  });
+};
+
+const buildCancelledMessage = () => {
+  return formatMessage({
+    title: 'Tracking Cancelled',
+    body: 'No problem. You can search again anytime.'
   });
 };
 
@@ -86,9 +131,19 @@ const handleWebhook = async (req, res) => {
               messageText = message.interactive?.button_reply?.title || '';
             }
 
-            // normalize simple choices
-            if (['1', '2', '3'].includes(messageText)) {
-              messageText = `track ${messageText}`;
+            const normalizedText = normalizeText(messageText);
+
+            if (['1', '2', '3', 'one', 'two', 'three'].includes(normalizedText)) {
+              messageText = `track ${normalizedText.replace(/[^0-9]/g, '')}`;
+            }
+
+            if (['stop', 'cancel', 'unsubscribe'].includes(normalizedText)) {
+              trackSessions.delete(fromPhone);
+              await sendReply(fromPhone,
+                buildCancelledMessage(),
+                buildButtons(['New search'])
+              );
+              return;
             }
 
             const activeSession = trackSessions.get(fromPhone);
@@ -103,23 +158,64 @@ const handleWebhook = async (req, res) => {
 
               if (!chosen) {
                 await sendReply(fromPhone,
-                  formatMessage({
-                    title: 'No Results',
-                    body: 'Search first before tracking.',
-                    options: ['New search']
-                  })
-                );
+                formatMessage({
+                  title: 'No Results',
+                  body: 'Search first before tracking.'
+                }),
+                buildButtons(['New search'])
+              );
                 return;
               }
 
               trackSessions.set(fromPhone, {
-                state: 'awaiting_duration',
+                state: 'action_selection',
+                product: chosen,
                 productName: chosen.title,
                 url: chosen.url,
                 basePrice: extractPriceFromResult(chosen)
               });
 
-              await sendReply(fromPhone, buildDurationPrompt(chosen));
+              await sendReply(fromPhone, buildProductInsightMessage(chosen), buildProductActionButtons());
+              return;
+            }
+
+            // ================= ACTION SELECTION =================
+            if (activeSession?.state === 'action_selection') {
+              const normalized = messageText.toLowerCase();
+
+              if (normalized.includes('start tracking')) {
+                trackSessions.set(fromPhone, {
+                  ...activeSession,
+                  state: 'awaiting_duration'
+                });
+
+                await sendReply(fromPhone, buildDurationPrompt(activeSession.product), buildButtons(['3 days', '7 days', 'Until price drops']));
+                return;
+              }
+
+              if (normalized.includes('set target')) {
+                trackSessions.set(fromPhone, {
+                  ...activeSession,
+                  state: 'awaiting_target'
+                });
+
+                await sendReply(fromPhone, buildTargetPrompt(), buildButtons(['Skip']));
+                return;
+              }
+
+              if (normalized === 'cancel') {
+                trackSessions.delete(fromPhone);
+                await sendReply(fromPhone, buildCancelledMessage());
+                return;
+              }
+
+              await sendReply(fromPhone,
+                formatMessage({
+                  title: 'Choose an action',
+                  body: 'Use one of the buttons or reply with a valid option.'
+                }),
+                buildButtons(['Start Tracking', 'Set Target Price', 'Cancel'])
+              );
               return;
             }
 
@@ -131,9 +227,9 @@ const handleWebhook = async (req, res) => {
                 await sendReply(fromPhone,
                   formatMessage({
                     title: 'Invalid Choice',
-                    body: 'Please select a valid duration.',
-                    options: ['3 days', '7 days', 'Until price drops']
-                  })
+                    body: 'Please select a valid duration.'
+                  }),
+                  buildButtons(['3 days', '7 days', 'Until price drops'])
                 );
                 return;
               }
@@ -147,9 +243,9 @@ const handleWebhook = async (req, res) => {
               await sendReply(fromPhone,
                 formatMessage({
                   title: 'Set Target Price',
-                  body: 'Enter your desired price (₹) or skip.',
-                  options: ['Skip']
-                })
+                  body: 'Enter your desired price (₹) or skip.'
+                }),
+                buildButtons(['Skip'])
               );
               return;
             }
@@ -164,9 +260,9 @@ const handleWebhook = async (req, res) => {
                 await sendReply(fromPhone,
                   formatMessage({
                     title: 'Invalid Price',
-                    body: 'Enter valid price or skip.',
-                    options: ['Skip']
-                  })
+                    body: 'Enter valid price or skip.'
+                  }),
+                  buildButtons(['Skip'])
                 );
                 return;
               }
@@ -189,9 +285,9 @@ const handleWebhook = async (req, res) => {
               await sendReply(fromPhone,
                 formatMessage({
                   title: 'Tracking Started',
-                  body: `📦 ${activeSession.productName}\n\nYou will be notified on price drop.`,
-                  options: ['View tracked items', 'New search']
-                })
+                  body: `📦 ${activeSession.productName}\n\nYou will be notified on price drop.`
+                }),
+                buildButtons(['View tracked items', 'New search'])
               );
               return;
             }
@@ -211,17 +307,15 @@ const handleWebhook = async (req, res) => {
               title: 'Top Deals Found',
               body: topOptions
                 .map((item, i) => `${i + 1}. ${item.title}\n💰 ${item.price || 'N/A'}`)
-                .join('\n\n'),
-              options: [
-                'Track 1',
-                'Track 2',
-                'Track 3',
-                'Show more',
-                'New search'
-              ]
+                .join('\n\n')
             });
 
-            await sendReply(fromPhone, messageOut);
+            const trackButtons = topOptions.map((item, i) => ({
+              id: `track_${i + 1}`,
+              title: `Track ${i + 1}`
+            }));
+
+            await sendReply(fromPhone, messageOut, trackButtons);
           }
         }
       }
