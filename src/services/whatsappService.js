@@ -2,6 +2,12 @@
 const axios = require('axios');
 const { GENERAL_TOKEN, PHONE_NUMBER_ID, GRAPH_API_VERSION } = require('../config/constants');
 
+const truncateText = (text, maxLength) => {
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 3)}...`;
+};
+
 /**
  * Send WhatsApp reply message with optional interactive buttons
  * @param {string} recipientPhone - Phone number of recipient
@@ -27,6 +33,11 @@ const sendReply = async (recipientPhone, replyText, buttons = null) => {
     
     if (buttons && buttons.length > 0) {
       // Interactive message with buttons
+      const buttonBody = truncateText(replyText, 1024);
+      if (buttonBody.length !== replyText.length) {
+        console.warn('⚠️ WhatsApp interactive body was truncated to 1024 characters');
+      }
+
       payload = {
         messaging_product: 'whatsapp',
         to: recipientPhone,
@@ -34,7 +45,7 @@ const sendReply = async (recipientPhone, replyText, buttons = null) => {
         interactive: {
           type: 'button',
           body: {
-            text: replyText
+            text: buttonBody
           },
           action: {
             buttons: buttons.map((btn, index) => ({
