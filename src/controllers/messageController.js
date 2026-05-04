@@ -233,4 +233,30 @@ const handleWebhook = async (req, res) => {
   res.status(200).end();
 };
 
-module.exports = { handleWebhook };
+const verifyWebhook = (req, res, verifyToken) => {
+  const { 'hub.mode': mode, 'hub.challenge': challenge, 'hub.verify_token': token } = req.query;
+  if (mode === 'subscribe' && token === verifyToken) {
+    console.log('WEBHOOK VERIFIED');
+    return res.status(200).send(challenge);
+  }
+  return res.status(403).end();
+};
+
+const getAllMessages = (req, res) => {
+  res.json({
+    total: receivedMessages.length,
+    messages: receivedMessages
+  });
+};
+
+const getLatestMessage = (req, res) => {
+  const latest = receivedMessages[receivedMessages.length - 1] || null;
+  res.json({ latestMessage: latest });
+};
+
+module.exports = {
+  handleWebhook,
+  verifyWebhook,
+  getAllMessages,
+  getLatestMessage
+};
