@@ -6,7 +6,7 @@ const {
   getGameDetailsWithDeals,
   compareDeals
 } = require('../services/gameDealsApiService');
-const { TRACKING_CONFIG } = require('../config/constants');
+const { TRACKING_CONFIG, GENERAL_TOKEN, PHONE_NUMBER_ID } = require('../config/constants');
 
 const buildFooter = () => {
   return '\n--------------\nReply STOP to cancel tracking';
@@ -381,6 +381,7 @@ const handleWebhook = async (req, res) => {
           }
 
           console.log(`Processing message from ${fromPhone} [type: ${message.type}]: "${messageText}"`);
+          console.log(`GENERAL_TOKEN set: ${!!GENERAL_TOKEN}, PHONE_NUMBER_ID: ${PHONE_NUMBER_ID}`);
 
           receivedMessages.push(new Message({
             messageId: message.id,

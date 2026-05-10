@@ -78,22 +78,24 @@ const sendReply = async (recipientPhone, replyText, buttons = null, options = {}
       };
     }
 
-    await axios.post(
-      `https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${GENERAL_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`;
+    console.log(`Sending to Meta API: ${url}`);
+    console.log(`Payload: ${JSON.stringify(payload)}`);
 
-    console.log(`WhatsApp reply sent to ${recipientPhone}`);
+    const response = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${GENERAL_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log(`WhatsApp reply sent to ${recipientPhone}. Response:`, JSON.stringify(response.data));
   } catch (error) {
-    console.error('Failed to send WhatsApp reply.');
+    console.error('=== sendReply FAILED ===');
     console.error('Status:', error.response?.status);
-    console.error('Error:', error.response?.data || error.message);
+    console.error('Meta error:', JSON.stringify(error.response?.data, null, 2));
+    console.error('Message:', error.message);
+    console.error('=======================');
   }
 };
 
