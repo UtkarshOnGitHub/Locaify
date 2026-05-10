@@ -345,7 +345,9 @@ const showGameDeals = async (fromPhone, game) => {
 };
 
 const handleWebhook = async (req, res) => {
-  if (req.body?.object !== 'whatsapp_business_account') {
+  const object = req.body?.object;
+  if (object !== 'whatsapp_business_account' && object !== 'whatsapp') {
+    console.log(`Ignoring webhook with unexpected object type: ${object}`);
     return res.status(200).end();
   }
 
@@ -368,9 +370,17 @@ const handleWebhook = async (req, res) => {
           const fromPhone = message.from;
           let messageText = getMessageText(message);
 
-          if (!fromPhone || !messageText) {
+          if (!fromPhone) {
+            console.log('Dropping message: missing fromPhone', JSON.stringify(message));
             continue;
           }
+
+          if (!messageText) {
+            console.log(`Dropping unsupported message type "${message.type}" from ${fromPhone}`);
+            continue;
+          }
+
+          console.log(`Processing message from ${fromPhone} [type: ${message.type}]: "${messageText}"`);
 
           receivedMessages.push(new Message({
             messageId: message.id,

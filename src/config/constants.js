@@ -3,13 +3,13 @@ module.exports = {
   PORT: process.env.PORT || 3000,
   VERIFY_TOKEN: process.env.VERIFY_TOKEN,
   GENERAL_TOKEN: (process.env.GENERAL_TOKEN || '').trim(),
-  CHEAPSHARK_API_BASE_URL: process.env.CHEAPSHARK_API_BASE_URL || 'https://www.cheapshark.com/api/1.0',
+  CHEAPSHARK_API_BASE_URL: process.env.CHEAPSHARK_API_BASE_URL,
   GROQ_API_KEY: process.env.GROQ_API_KEY,
-  MONGODB_URI: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/locaify',
+  MONGODB_URI: process.env.MONGODB_URI,
   
   // Phone configuration
-  PHONE_NUMBER_ID: '1053035681233537',
-  GRAPH_API_VERSION: 'v25.0',
+  PHONE_NUMBER_ID: process.env.PHONE_NUMBER_ID || '1053035681233537',
+  GRAPH_API_VERSION: process.env.GRAPH_API_VERSION || 'v25.0',
   
   // Groq configuration reserved for future conversational intent parsing
   GROQ_CONFIG: {
