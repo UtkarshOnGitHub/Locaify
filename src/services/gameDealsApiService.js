@@ -178,8 +178,15 @@ const getGameDetailsWithDeals = async (gameID) => {
 };
 
 const getDealDetails = async (dealID) => {
+  // dealID from CheapShark is already URL-encoded (e.g. contains %3D).
+  // Passing it through axios `params` would double-encode it (%3D → %253D),
+  // causing a 404. Decode first so axios re-encodes it back to the correct form.
+  const decodedDealID = decodeURIComponent(dealID);
+  const builtUrl = `${CHEAPSHARK_API_BASE_URL}/deals?id=${encodeURIComponent(decodedDealID)}`;
+  console.log(`[getDealDetails] Requesting: ${builtUrl}`);
+
   const response = await apiClient.get('/deals', {
-    params: { id: dealID }
+    params: { id: decodedDealID }
   });
   const storeMap = await getStoreMap();
 
