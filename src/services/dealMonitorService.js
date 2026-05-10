@@ -49,7 +49,7 @@ const runDealMonitoringCheck = async () => {
       console.error(`Failed to fetch deal ${track.dealID}: ${error.message}`);
       continue;
     }
-    const newPrice = deal.price;
+    const newPrice = deal.price || deal.startPrice;
 
     if (!Number.isFinite(newPrice)) {
       console.log(`Deal price unavailable for deal ${track.dealID}`);
