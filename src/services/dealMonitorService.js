@@ -42,7 +42,29 @@ const runDealMonitoringCheck = async () => {
     .sort({ updatedAt: 1 });
 
   for (const track of tracks) {
-    const deal = await getDealDetails(track.dealID);
+    let deal;
+
+    try {
+      deal = await getDealDetails(track.dealID);
+    } catch (err) {
+      const status = err.response?.status;
+
+      if (status === 404) {
+        // Deal no longer exists on CheapShark — deactivate silently
+        console.log(`Deal ${track.dealID} not found (404) for "${track.gameTitle}" — marking inactive.`);
+        await TrackedGame.updateOne(
+          { _id: track._id },
+          { $set: { isActive: false, lastCheckedAt: new Date() } }
+        );
+      } else {
+        // Transient error (timeout, 5xx) — skip this cycle, try again next run
+        console.error(`Failed to fetch deal ${track.dealID} for "${track.gameTitle}": ${err.message}`);
+      }
+
+      await sleep(TRACKING_CONFIG.requestDelayMs);
+      continue;
+    }
+
     const newPrice = deal.price;
 
     if (!Number.isFinite(newPrice)) {

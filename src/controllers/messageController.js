@@ -6,7 +6,7 @@ const {
   getGameDetailsWithDeals,
   compareDeals
 } = require('../services/gameDealsApiService');
-const { TRACKING_CONFIG } = require('../config/constants');
+const { TRACKING_CONFIG: _TRACKING_CONFIG } = require('../config/constants'); // reserved for future use
 
 // ---------------------------------------------------------------------------
 // Currency
@@ -59,7 +59,8 @@ const MAX_PROCESSED_MESSAGE_IDS = 1000;
 const GO_AHEAD_REGEX = /^go\s*ahead$/i;
 const REFINE_SEARCH_REGEX = /^refine\s*search$/i;
 const TRACK_COMMAND_REGEX = /^track(?:\s+this)?(?:\s+(?:deal\s+)?([1-9]))?$/i;
-const TRACK_ALL_REGEX = /^track\s+all(?:\s+stores)?$/i;
+const TRACK_ALL_REGEX = /^track\s+(all(\s+stores)?|across\s+all(\s+stores)?)$/i;
+const TRACK_STORE_ID_REGEX = /^track_store_(\d+)$/;  // matches button IDs like track_store_0
 
 // ---------------------------------------------------------------------------
 // Text utilities
@@ -119,6 +120,13 @@ const getMessageText = (message) => {
     ).trim();
   }
   return '';
+};
+
+const getButtonId = (message) => {
+  if (message.type === 'interactive') {
+    return message.interactive?.button_reply?.id || null;
+  }
+  return null;
 };
 
 // ---------------------------------------------------------------------------
@@ -293,10 +301,16 @@ const showGameDeals = async (fromPhone, game) => {
     bestDeal: comparison.bestDeal
   });
 
-  const trackingButtons = buildButtons([
-    'Track All',
-    ...topDeals.slice(0, 2).map((_, i) => `Track ${i + 1}`)
-  ]);
+  // Button 1: Track across all stores
+  // Button 2: Track only on the best deal store (index 0)
+  // WhatsApp button titles max 20 chars — use ID for routing, title for display
+  const bestStoreName = topDeals[0]?.storeName || 'Best Store';
+  const storeLabel = `Only on ${bestStoreName}`.substring(0, 20);
+
+  const trackingButtons = [
+    { id: 'track_all', title: 'Track All Stores' },
+    { id: 'track_store_0', title: storeLabel }
+  ];
 
   await sendImageReply(fromPhone, thumbnailUrl, bodyText, trackingButtons);
 };
@@ -340,6 +354,7 @@ const handleWebhook = async (req, res) => {
           }));
 
           const normalizedText = normalizeText(messageText);
+          const buttonId = getButtonId(message);
           const activeSession = trackSessions.get(fromPhone);
           const cachedGame = userGameCache.get(fromPhone);
           const dealCache = userDealCache.get(fromPhone);
@@ -379,8 +394,9 @@ const handleWebhook = async (req, res) => {
             continue;
           }
 
-          // ── Track All ────────────────────────────────────────────────────
-          if (TRACK_ALL_REGEX.test(messageText)) {
+          // ── Track All Stores (button ID or text fallback) ────────────────
+          const isTrackAll = buttonId === 'track_all' || TRACK_ALL_REGEX.test(messageText);
+          if (isTrackAll) {
             if (!dealCache?.deals?.length) {
               await sendReply(fromPhone, 'Search for a game first, then I can track all stores.');
               continue;
@@ -399,17 +415,21 @@ const handleWebhook = async (req, res) => {
             continue;
           }
 
-          // ── Track N (specific deal) ──────────────────────────────────────
-          const trackMatch = messageText.match(TRACK_COMMAND_REGEX);
-          if (trackMatch) {
+          // ── Track only on a specific store (button ID or text fallback) ──
+          const storeIdMatch = buttonId?.match(TRACK_STORE_ID_REGEX) || messageText.match(TRACK_COMMAND_REGEX);
+          if (storeIdMatch) {
             if (!dealCache?.deals?.length) {
               await sendReply(fromPhone, 'Search for a game first, then choose a deal to track.');
               continue;
             }
-            const index = trackMatch[1] ? Number(trackMatch[1]) - 1 : 0;
+            // Button ID "track_store_0" → index 0; text "track 2" → index 1
+            const index = buttonId?.match(TRACK_STORE_ID_REGEX)
+              ? Number(buttonId.match(TRACK_STORE_ID_REGEX)[1])
+              : (storeIdMatch[1] ? Number(storeIdMatch[1]) - 1 : 0);
+
             const chosenDeal = dealCache.deals[index];
             if (!chosenDeal) {
-              await sendReply(fromPhone, 'That deal number is not in the list. Choose one of the shown deals.');
+              await sendReply(fromPhone, 'That store is not in the list. Choose one of the shown deals.');
               continue;
             }
             const session = buildTrackingSession({
