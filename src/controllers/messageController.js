@@ -150,35 +150,34 @@ const buildGameResultCard = (game) => {
 
 /**
  * Deal results card — shown after game lookup.
- * Sent as an image message with tracking buttons.
+ * Shows only the best deal. No purchase links. Clean summary.
  */
-const buildDealResultsMessage = ({ title, cheapestPriceEver, deals, bestDeal }) => {
-  const topDeals = deals.slice(0, 3);
+const buildDealResultsMessage = ({ title, cheapestPriceEver, bestDeal, totalStores }) => {
+  if (!bestDeal) {
+    return `*${title}*\n\nNo active deals found right now.`;
+  }
 
-  const dealLines = topDeals.map((deal, index) => {
-    const savingsText = deal.savings > 0 ? ` (-${Math.round(deal.savings)}%)` : '';
-    return (
-      `${index + 1}. *${deal.storeName}*\n` +
-      `   ${formatINR(deal.price)}${savingsText}\n` +
-      `   ${deal.purchaseUrl}`
-    );
-  });
-
-  const bestLine = bestDeal
-    ? `🏆 Best deal: *${bestDeal.storeName}* at ${formatINR(bestDeal.price)}`
-    : '🏆 Best deal: Not available';
+  const savingsText = bestDeal.savings > 0
+    ? ` · ${Math.round(bestDeal.savings)}% off`
+    : '';
 
   const historicalLine = Number.isFinite(cheapestPriceEver?.price)
     ? `📉 All-time low: ${formatINR(cheapestPriceEver.price)}`
     : null;
 
+  const storeCountLine = totalStores > 1
+    ? `🏪 Found on ${totalStores} stores — this is the best price right now.`
+    : `🏪 Found on 1 store.`;
+
   const lines = [
     `*${title}*`,
     '',
-    bestLine,
+    `🏆 Best deal`,
+    `*${bestDeal.storeName}*  ${formatINR(bestDeal.price)}${savingsText}`,
     ...(historicalLine ? [historicalLine] : []),
     '',
-    ...dealLines
+    storeCountLine,
+    `I can monitor all stores and alert you when the price drops further.`
   ];
 
   return lines.join('\n');
@@ -254,24 +253,28 @@ const saveTrackingSession = async ({ fromPhone, session, targetPrice }) => {
   await TrackedGame.findOneAndUpdate(
     { userPhone: fromPhone, gameID: session.gameID },
     {
-      userPhone: fromPhone,
-      gameID: session.gameID,
-      dealID: deal.dealID,
-      gameTitle: session.gameTitle,
-      purchaseUrl: deal.purchaseUrl,
-      storeID: deal.storeID,
-      storeName: deal.storeName,
-      baselinePrice,
-      lastCheckedPrice: baselinePrice,
-      targetPrice,
-      trackingMode,
-      trackingScope: session.trackingScope,
-      expiresAt,
-      isActive: true,
-      lastNotifiedPrice: null,
-      checkCount: 0
+      $set: {
+        dealID: deal.dealID,
+        gameTitle: session.gameTitle,
+        purchaseUrl: deal.purchaseUrl,
+        storeID: deal.storeID,
+        storeName: deal.storeName,
+        baselinePrice,
+        lastCheckedPrice: baselinePrice,
+        targetPrice,
+        trackingMode,
+        trackingScope: session.trackingScope,
+        expiresAt,
+        isActive: true,
+        lastNotifiedPrice: null,
+        checkCount: 0
+      },
+      $setOnInsert: {
+        userPhone: fromPhone,
+        gameID: session.gameID
+      }
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, new: true }
   );
 };
 
@@ -282,15 +285,16 @@ const saveTrackingSession = async ({ fromPhone, session, targetPrice }) => {
 const showGameDeals = async (fromPhone, game) => {
   const gameDetails = await getGameDetailsWithDeals(game.gameID);
   const comparison = compareDeals(gameDetails.deals);
-  const topDeals = comparison.deals.slice(0, 3);
 
-  if (!topDeals.length) {
+  if (!comparison.deals.length) {
     await sendReply(fromPhone, buildNoDealsMessage(gameDetails.title || game.title));
     return;
   }
 
   const gameTitle = gameDetails.title || game.title;
   const thumbnailUrl = gameDetails.thumbnailUrl || game.thumbnailUrl || null;
+  const bestDeal = comparison.bestDeal;
+  const totalStores = comparison.deals.length;
 
   userDealCache.set(fromPhone, {
     gameID: game.gameID,
@@ -303,14 +307,11 @@ const showGameDeals = async (fromPhone, game) => {
   const bodyText = buildDealResultsMessage({
     title: gameTitle,
     cheapestPriceEver: gameDetails.cheapestPriceEver,
-    deals: topDeals,
-    bestDeal: comparison.bestDeal
+    bestDeal,
+    totalStores
   });
 
-  // Button 1: Track across all stores
-  // Button 2: Track only on the best deal store (index 0)
-  // WhatsApp button titles max 20 chars — use ID for routing, title for display
-  const bestStoreName = topDeals[0]?.storeName || 'Best Store';
+  const bestStoreName = bestDeal?.storeName || 'Best Store';
   const storeLabel = `Only on ${bestStoreName}`.substring(0, 20);
 
   const trackingButtons = [
