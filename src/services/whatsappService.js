@@ -24,6 +24,11 @@ const sendReply = async (recipientPhone, replyText, buttons = null, options = {}
       return;
     }
 
+    // Only use headerImageUrl if it's a valid absolute HTTPS URL
+    const headerImageUrl = (options.headerImageUrl && options.headerImageUrl.startsWith('https://'))
+      ? options.headerImageUrl
+      : null;
+
     let payload;
 
     if (buttons && buttons.length > 0) {
@@ -38,12 +43,12 @@ const sendReply = async (recipientPhone, replyText, buttons = null, options = {}
         type: 'interactive',
         interactive: {
           type: 'button',
-          ...(options.headerImageUrl
+          ...(headerImageUrl
             ? {
                 header: {
                   type: 'image',
                   image: {
-                    link: options.headerImageUrl
+                    link: headerImageUrl
                   }
                 }
               }
@@ -56,13 +61,13 @@ const sendReply = async (recipientPhone, replyText, buttons = null, options = {}
           }
         }
       };
-    } else if (options.headerImageUrl) {
+    } else if (headerImageUrl) {
       payload = {
         messaging_product: 'whatsapp',
         to: recipientPhone,
         type: 'image',
         image: {
-          link: options.headerImageUrl,
+          link: headerImageUrl,
           caption: truncateText(replyText, 1024)
         }
       };
