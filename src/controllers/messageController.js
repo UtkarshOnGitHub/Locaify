@@ -572,7 +572,21 @@ const handleWebhook = async (req, res) => {
             continue;
           }
 
-          const games = await searchGamesByTitle(messageText);
+          let games;
+          try {
+            games = await searchGamesByTitle(messageText);
+          } catch (error) {
+            console.error(`Game search error for "${messageText}": ${error.message}`);
+            await sendReply(
+              fromPhone,
+              formatMessage({
+                title: 'Search Error',
+                body: 'Sorry, I could not search for games right now. Please try again later.'
+              })
+            );
+            continue;
+          }
+
           const gameCacheForUser = {
             query: messageText,
             games,
@@ -594,7 +608,11 @@ const handleWebhook = async (req, res) => {
           userGameCache.set(fromPhone, gameCacheForUser);
           userDealCache.delete(fromPhone);
 
-          await sendGameSearchPage(fromPhone, gameCacheForUser);
+          try {
+            await sendGameSearchPage(fromPhone, gameCacheForUser);
+          } catch (error) {
+            console.error(`Failed to send game search page: ${error.message}`);
+          }
         }
       }
     }
