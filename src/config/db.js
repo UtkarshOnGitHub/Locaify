@@ -8,7 +8,7 @@ const connectToDatabase = async () => {
 
   await mongoose.connect(MONGODB_URI);
   isConnected = true;
-  console.log(`✅ MongoDB connected: ${mongoose.connection.name}`);
+  console.log(`MongoDB connected: ${mongoose.connection.name}`);
   return mongoose.connection;
 };
 

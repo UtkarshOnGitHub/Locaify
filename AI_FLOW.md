@@ -1,199 +1,95 @@
-# AI-Powered Search Flow
+# Conversational Deal Flow
 
-## Overview
+## Purpose
 
-Locaify uses a multi-step AI pipeline to provide intelligent search results via WhatsApp. Here's how it works:
+Locaify is moving into a personal game deal assistant. Lookup and tracking now use the CheapShark API endpoints directly.
 
-## 🔄 Message Flow
+## Current POC Flow
 
-```
-User Message
-    ↓
-[1] Groq LLM - Query Refinement
-    ↓
-[2] Tavily API - Web Search (India-focused)
-    ↓
-[3] Groq LLM - Format & Summarize Results
-    ↓
-WhatsApp Response
-```
-
-## 📋 Detailed Steps
-
-### Step 1: Query Refinement (Groq LLM)
-- **Input**: Raw user message (e.g., "best laptops for programming")
-- **Process**: Uses Groq to refine the query for better search results
-- **Output**: Optimized search query (e.g., "Top programming laptops 2024 India")
-- **Model**: Mixtral-8x7b-32768
-- **Temperature**: 0.3 (deterministic)
-
-### Step 2: Web Search (Tavily API)
-- **Input**: Refined query + Location (India)
-- **Process**: Performs advanced web search with location filtering
-- **Output**: Top 5 relevant results with titles, content, and URLs
-- **Search Depth**: Advanced
-- **Country**: India
-
-### Step 3: Result Formatting & Summarization (Groq LLM)
-- **Input**: Search results + Original user query
-- **Process**: 
-  - Extracts top 3 most relevant results
-  - Generates concise summary of key information
-  - Formats as WhatsApp-friendly message
-- **Output**: Readable WhatsApp message with:
-  - Result titles and descriptions
-  - Source links
-  - Key insights summary
-
-### Step 4: WhatsApp Delivery
-- **Input**: Formatted response
-- **Process**: Sends to user via WhatsApp Business API
-- **Output**: Message appears in user's WhatsApp chat
-
-## 🛠️ Services Architecture
-
-### `groqService.js`
-```javascript
-// Query Refinement
-refineQuery(userMessage) 
-  → Returns: optimized search query
-
-// Result Formatting
-formatSearchResults(query, results)
-  → Returns: formatted WhatsApp message
-
-// Summary Generation
-generateSummary(query, results)
-  → Returns: concise key insights
+```text
+User enters game name
+  -> GET /api/1.0/games?title={gameName}
+  -> Show matching games
+  -> User selects a game
+  -> GET /api/1.0/games?id={gameID}
+  -> GET /api/1.0/stores
+  -> Compare all available deals
+  -> Show best deal, discounts, historical low, and purchase links
+  -> User chooses Track All or Track N
+  -> Store gameID/dealID tracking records
+  -> Cron calls GET /api/1.0/deals?id={dealID}
+  -> Send WhatsApp alert when price improves or target is hit
 ```
 
-### `tavilyService.js`
-```javascript
-searchWithLocation(query, location)
-  → Returns: search results from web
-```
+## API Responsibilities
 
-### `whatsappService.js`
-```javascript
-sendReply(recipientPhone, replyText)
-  → Sends message via WhatsApp Business API
-```
+### Search Game By Name
 
-## 🔑 API Keys Required
+`GET /api/1.0/games?title={gameName}`
 
-1. **Tavily API Key** (Web Search)
-   - Get from: https://tavily.com
-   - Used for: Finding relevant information
-   - Cost: Free tier available
+- Search game from user input.
+- Return matching games.
+- Provide the `gameID` used for detail lookup.
 
-2. **Groq API Key** (LLM)
-   - Get from: https://console.groq.com
-   - Used for: Query refinement & result formatting
-   - Cost: Free tier with generous rate limits (~500 requests/min)
+### Get Game Details And All Deals
 
-3. **WhatsApp Business API**
-   - Get from: Meta Business Platform
-   - Used for: Sending/receiving messages
+`GET /api/1.0/games?id={gameID}`
 
-## 📊 Example Request/Response
+- Fetch all store prices.
+- Fetch discounts.
+- Fetch historical lowest prices.
+- Fetch deal IDs.
+- Feed comparison and recommendation logic.
 
-### User Input
-```
-"best gaming laptops under 100000 rupees"
-```
+### Get Specific Deal Details
 
-### Step 1: Query Refinement
-```
-Refined Query: "Top gaming laptops under ₹100000 India 2024"
-```
+`GET /api/1.0/deals?id={dealID}`
 
-### Step 2: Search Results (Simplified)
-```
-[
-  {
-    title: "Best Gaming Laptops Under 1 Lakh",
-    content: "Dell G15, ASUS TUF series...",
-    url: "example.com/gaming-laptops"
-  },
-  ...
-]
-```
+- Fetch latest deal information.
+- Power cron checks.
+- Support periodic price monitoring.
+- Detect better deals or target-price hits.
 
-### Step 3: Formatted Response
-```
-🔍 Search Results for: best gaming laptops under 100000 rupees
+### Get Store Metadata
 
-1. Best Gaming Laptops Under 1 Lakh
-Dell G15, ASUS TUF series recommended...
-🔗 Source: example.com/gaming-laptops
+`GET /api/1.0/stores`
 
-2. Budget Gaming Laptops in India...
-...
+- Fetch store IDs and display names.
+- Fetch active/inactive store status.
+- Fetch store image paths for future UI use.
+- Enrich all deal responses that only include `storeID`.
 
-📌 Summary:
-• Top models: Dell G15, ASUS TUF
-• Price range: ₹70,000 - ₹100,000
-• Key specs: RTX 3050+, 16GB RAM
-```
+## Assistant Responsibilities
 
-## ⚙️ Configuration
+- Detect whether the user wants search, comparison, tracking, or target-price alerts.
+- Ask follow-up questions only when required.
+- Show matching games before tracking when the title is ambiguous.
+- Compare current store prices from the game details endpoint.
+- Recommend the best available deal with direct purchase links.
+- Support tracking across all stores or one selected store.
+- Store `dealID`s so background jobs can refresh prices directly.
 
-All settings are in `src/config/constants.js`:
+## Recommendation Inputs
 
-```javascript
-// Groq LLM Settings
-GROQ_CONFIG: {
-  model: 'mixtral-8x7b-32768',
-  temperature: 0.3,
-  max_tokens: 500
-}
+- Current price
+- Discount percentage
+- Historical low
+- Store reliability
+- Availability
+- Platform/store preference
+- User target price
+- Recent pricing trend
 
-// Tavily Settings
-TAVILY_CONFIG: {
-  searchDepth: 'advanced',
-  max_results: 5
-}
-```
+## Planned Service Split
 
-### Tuning Parameters
+- `intentService`: classify natural-language user messages.
+- `gameDealsApiService`: wrap CheapShark game and deal endpoints.
+- `dealComparisonService`: compare prices and discounts across stores.
+- `recommendationService`: score deals and explain the best option.
+- `dealMonitorService`: run background checks and alert users.
 
-- **temperature** (0-1): Lower = more focused, Higher = more creative
-  - Current: 0.3 (factual, deterministic)
-  
-- **max_tokens**: Maximum words in response
-  - Current: 500 (suitable for WhatsApp)
-  
-- **searchDepth**: 'basic' or 'advanced'
-  - Current: 'advanced' (more thorough search)
+## Current Limitations
 
-## 🚨 Error Handling
-
-If any step fails:
-1. **Query Refinement Fails**: Uses original message
-2. **Search Fails**: Returns "No results found" message
-3. **Formatting Fails**: Returns raw results
-4. **WhatsApp Send Fails**: Logs error, doesn't retry
-
-## 📈 Performance
-
-- **Query Refinement**: ~1-2 seconds (Groq)
-- **Web Search**: ~2-3 seconds (Tavily)
-- **Result Formatting**: ~1-2 seconds (Groq)
-- **Total Response Time**: ~4-7 seconds
-
-## 🔐 Privacy & Rate Limits
-
-- **Groq**: 500 requests/minute (free tier)
-- **Tavily**: 1000 requests/month (free tier)
-- **WhatsApp**: Rate limited by Meta
-
-## 🎯 Future Enhancements
-
-1. Add conversation context (remember user preferences)
-2. Support image/media in WhatsApp messages
-3. Add filtering by date range
-4. Support multiple languages
-5. Add user feedback loop for result quality
-6. Implement caching for common queries
-7. Add analytics dashboard
-8. Support voice messages
+- Recommendation is still mostly cheapest-price based.
+- Prediction and upcoming-sale logic are not implemented.
+- User preferences and notification cadence are not fully modeled yet.

@@ -1,47 +1,52 @@
-// Message Controller (Refactored with structured templates)
 const Message = require('../models/Message');
+const TrackedGame = require('../models/TrackedGame');
 const { sendReply } = require('../services/whatsappService');
-const { getLocation } = require('../services/locationService');
-const { searchWithLocation } = require('../services/tavilyService');
-const { refineQuery, formatSearchResults } = require('../services/groqService');
-const TrackedProduct = require('../models/TrackedProduct');
+const {
+  searchGamesByTitle,
+  getGameDetailsWithDeals,
+  compareDeals
+} = require('../services/gameDealsApiService');
+const { TRACKING_CONFIG } = require('../config/constants');
 
-// ================= TEMPLATE HELPERS =================
 const buildFooter = () => {
-  return '\n──────────────\n⚙️ Reply STOP to cancel tracking';
+  return '\n--------------\nReply STOP to cancel tracking';
 };
 
 const buildButtons = (options = []) => {
-  return options.slice(0, 3).map((option, index) => ({
-    id: `opt_${index + 1}`,
-    title: option.substring(0, 20)
-  }));
+  return options.slice(0, 3).map((option, index) => {
+    if (typeof option === 'string') {
+      return { id: `opt_${index + 1}`, title: option.substring(0, 20) };
+    }
+
+    return {
+      id: option.id || `opt_${index + 1}`,
+      title: String(option.title || option.label || `Option ${index + 1}`).substring(0, 20)
+    };
+  });
 };
 
 const formatMessage = ({ title, body }) => {
-  return (
-    `${title ? `🔥 *${title}*\n\n` : ''}` +
-    `${body}` +
-    buildFooter()
-  );
+  return `${title ? `*${title}*\n\n` : ''}${body}${buildFooter()}`;
 };
 
-// ================= STATE =================
 const receivedMessages = [];
-const userSearchCache = new Map();
+const userGameCache = new Map();
+const userDealCache = new Map();
 const trackSessions = new Map();
 const processedMessageIds = new Set();
 const MAX_PROCESSED_MESSAGE_IDS = 1000;
 
-const TRACK_COMMAND_REGEX = /^track(?:\s+this)?(?:\s+([1-3]))?$/i;
+const SELECT_GAME_REGEX = /^(?:game|select)\s+([1-3])$/i;
+const TRACK_COMMAND_REGEX = /^track(?:\s+this)?(?:\s+(?:deal\s+)?([1-9]))?$/i;
+const TRACK_ALL_REGEX = /^track\s+all(?:\s+stores)?$/i;
+const NUMBER_SHORTCUTS = { one: '1', two: '2', three: '3' };
 
-// ================= HELPERS =================
 const normalizeText = (text) => {
   if (!text) return '';
   return text
     .trim()
     .toLowerCase()
-    .replace(/[^\u0000-\u007F]+/g, ' ') // strip emoji/non-ascii
+    .replace(/[^\u0000-\u007F]+/g, ' ')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -50,14 +55,19 @@ const normalizeText = (text) => {
 const parseDurationChoice = (text) => {
   const normalized = normalizeText(text);
 
-  if (/\b(1|one|3|three)\b/.test(normalized) || normalized.includes('3 days') || normalized.includes('three days')) {
+  if (/\b(1|one)\b/.test(normalized) || normalized.includes('3 days') || normalized.includes('three days')) {
     return { trackingMode: 'duration', days: 3 };
   }
-  if (/\b(2|two|7|seven)\b/.test(normalized) || normalized.includes('7 days') || normalized.includes('seven days')) {
+  if (/\b(2|two)\b/.test(normalized) || normalized.includes('7 days') || normalized.includes('seven days')) {
     return { trackingMode: 'duration', days: 7 };
   }
-  if (normalized.includes('until drop') || normalized.includes('until price drops') || normalized.includes('until dropped')) {
-    return { trackingMode: 'until_drop', days: null };
+  if (
+    /\b(3|three)\b/.test(normalized) ||
+    normalized.includes('until better deal') ||
+    normalized.includes('until price drops') ||
+    normalized.includes('until drop')
+  ) {
+    return { trackingMode: 'until_better_deal', days: null };
   }
 
   return null;
@@ -65,9 +75,9 @@ const parseDurationChoice = (text) => {
 
 const parseCurrencyNumber = (text) => {
   if (!text) return null;
-  const cleaned = text.replace(/[^\d.]/g, '');
+  const cleaned = String(text).replace(/[^\d.]/g, '');
   const value = Number(cleaned);
-  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+  return Number.isFinite(value) && value > 0 ? Math.round(value * 100) / 100 : null;
 };
 
 const rememberProcessedMessage = (messageId) => {
@@ -80,61 +90,194 @@ const rememberProcessedMessage = (messageId) => {
   processedMessageIds.delete(oldestMessageId);
 };
 
-const extractPriceFromResult = (result) => {
-  const blob = `${result?.title || ''} ${result?.content || ''}`;
-  const match = blob.match(/(?:₹|rs\.?|inr)\s?([\d,]{3,})/i);
-  if (!match) return null;
-  return parseCurrencyNumber(match[1]);
+const getMessageText = (message) => {
+  if (message.type === 'text') {
+    return (message.text?.body || '').trim();
+  }
+
+  if (message.type === 'interactive') {
+    return (
+      message.interactive?.button_reply?.title ||
+      message.interactive?.list_reply?.title ||
+      ''
+    ).trim();
+  }
+
+  return '';
 };
 
-const buildDurationPrompt = (result) => {
+const formatPrice = (price) => {
+  if (!Number.isFinite(price)) return 'N/A';
+  return `${TRACKING_CONFIG.defaultCurrency} ${price.toFixed(2)}`;
+};
+
+const formatHistoricalLow = (cheapestPriceEver) => {
+  if (!Number.isFinite(cheapestPriceEver?.price)) return 'Historical low: N/A';
+  const dateText = cheapestPriceEver.date
+    ? cheapestPriceEver.date.toISOString().slice(0, 10)
+    : 'date unknown';
+  return `Historical low: ${formatPrice(cheapestPriceEver.price)} (${dateText})`;
+};
+
+const buildGameSearchResultsMessage = (games) => {
+  return formatMessage({
+    title: 'Matching Games',
+    body: games
+      .map((game, index) => (
+        `${index + 1}. ${game.title}\n` +
+        `Best seen now: ${formatPrice(game.cheapestPrice)}`
+      ))
+      .join('\n\n')
+  });
+};
+
+const buildDealResultsMessage = ({ title, cheapestPriceEver, deals, bestDeal }) => {
+  const dealLines = deals.slice(0, 3).map((deal, index) => (
+    `${index + 1}. ${deal.storeName}\n` +
+    `Price: ${formatPrice(deal.price)}\n` +
+    `Discount: ${deal.savings}%\n` +
+    `Buy: ${deal.purchaseUrl}`
+  ));
+
+  const recommendation = bestDeal
+    ? `Recommended: ${bestDeal.storeName} at ${formatPrice(bestDeal.price)}`
+    : 'Recommended: No available deal found';
+
+  return formatMessage({
+    title: title || 'Game Deals',
+    body: [
+      recommendation,
+      formatHistoricalLow(cheapestPriceEver),
+      '',
+      ...dealLines,
+      '',
+      'Reply Track All to monitor every listed store.'
+    ].join('\n')
+  });
+};
+
+const buildDurationPrompt = (session) => {
+  const scopeText = session.trackingScope === 'all_stores'
+    ? 'all available stores'
+    : session.deals[0]?.storeName || 'this store';
+
   return formatMessage({
     title: 'Tracking Setup',
-    body: `📦 ${result.title}\n\nHow long should I track this?`
+    body: `${session.gameTitle}\nTracking: ${scopeText}\n\nHow long should I watch this game deal?`
   });
 };
-
-const buildProductInsightMessage = (product) => {
-  return formatMessage({
-    title: 'Price Insight',
-    body: `🎧 ${product.title || product.url}\n💰 ${product.price || '₹ N/A'}\n\nI can track it for you and notify you instantly when it hits a better price.`
-  });
-};
-
-const buildProductActionButtons = () => ([
-  { id: 'start_tracking', title: 'Start Tracking' },
-  { id: 'set_target_price', title: 'Set Target Price' },
-  { id: 'cancel', title: 'Cancel' }
-]);
 
 const buildTargetPrompt = () => {
   return formatMessage({
     title: 'Target Price',
-    body: 'Send your desired price in INR or reply Skip.'
+    body: `Send your desired price in ${TRACKING_CONFIG.defaultCurrency} or reply Skip.`
   });
 };
 
 const buildCancelledMessage = () => {
   return formatMessage({
     title: 'Tracking Cancelled',
-    body: 'No problem. You can search again anytime.'
+    body: 'No problem. You can search for another game anytime.'
   });
 };
 
-// ================= WEBHOOK =================
+const getExpiryDate = ({ trackingMode, days }) => {
+  if (trackingMode !== 'duration' || !days) return null;
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+};
+
+const buildTrackingSession = ({ fromPhone, dealCache, trackingScope, deals }) => {
+  const session = {
+    state: 'awaiting_duration',
+    gameID: dealCache.gameID,
+    gameTitle: dealCache.gameTitle,
+    trackingScope,
+    deals
+  };
+
+  trackSessions.set(fromPhone, session);
+  return session;
+};
+
+const saveTrackingSession = async ({ fromPhone, session, targetPrice }) => {
+  const trackingMode = session.trackingMode || 'duration';
+  const expiresAt = getExpiryDate({
+    trackingMode,
+    days: session.days
+  });
+
+  for (const deal of session.deals) {
+    const baselinePrice = deal.price || targetPrice || 0;
+
+    await TrackedGame.findOneAndUpdate(
+      { userPhone: fromPhone, gameID: session.gameID, dealID: deal.dealID },
+      {
+        userPhone: fromPhone,
+        gameID: session.gameID,
+        dealID: deal.dealID,
+        gameTitle: session.gameTitle,
+        purchaseUrl: deal.purchaseUrl,
+        storeID: deal.storeID,
+        storeName: deal.storeName,
+        baselinePrice,
+        lastCheckedPrice: baselinePrice,
+        targetPrice,
+        trackingMode,
+        trackingScope: session.trackingScope,
+        expiresAt,
+        isActive: true
+      },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+  }
+};
+
+const showGameDeals = async (fromPhone, game) => {
+  const gameDetails = await getGameDetailsWithDeals(game.gameID);
+  const comparison = compareDeals(gameDetails.deals);
+  const topDeals = comparison.deals.slice(0, 3);
+
+  if (!topDeals.length) {
+    await sendReply(
+      fromPhone,
+      formatMessage({
+        title: 'No Deals Found',
+        body: `I found ${game.title}, but there are no active store deals right now.`
+      })
+    );
+    return;
+  }
+
+  userDealCache.set(fromPhone, {
+    gameID: game.gameID,
+    gameTitle: gameDetails.title || game.title,
+    deals: comparison.deals,
+    cheapestPriceEver: gameDetails.cheapestPriceEver
+  });
+
+  const actionButtons = ['Track All', ...topDeals.slice(0, 2).map((deal, index) => `Track ${index + 1}`)];
+
+  await sendReply(
+    fromPhone,
+    buildDealResultsMessage({
+      title: gameDetails.title || game.title,
+      cheapestPriceEver: gameDetails.cheapestPriceEver,
+      deals: topDeals,
+      bestDeal: comparison.bestDeal
+    }),
+    buildButtons(actionButtons)
+  );
+};
+
 const handleWebhook = async (req, res) => {
   if (req.body?.object !== 'whatsapp_business_account') {
     return res.status(200).end();
   }
 
-  // Meta retries webhooks when the endpoint does not acknowledge quickly.
-  // Acknowledge first, then process so retries do not create duplicate replies.
   res.status(200).end();
 
   try {
-    const body = req.body;
-
-    const entries = body.entry || [];
+    const entries = req.body.entry || [];
 
     for (const entry of entries) {
       for (const change of entry.changes || []) {
@@ -148,13 +291,7 @@ const handleWebhook = async (req, res) => {
           rememberProcessedMessage(message.id);
 
           const fromPhone = message.from;
-
-          let messageText = '';
-          if (message.type === 'text') {
-            messageText = (message.text?.body || '').trim();
-          } else if (message.type === 'interactive') {
-            messageText = message.interactive?.button_reply?.title || '';
-          }
+          let messageText = getMessageText(message);
 
           if (!fromPhone || !messageText) {
             continue;
@@ -165,199 +302,196 @@ const handleWebhook = async (req, res) => {
             messageBody: messageText,
             messageType: message.type,
             from: fromPhone,
-            timestamp: new Date()
+            receivedAt: new Date().toISOString()
           }));
 
-            const normalizedText = normalizeText(messageText);
+          const normalizedText = normalizeText(messageText);
+          const activeSession = trackSessions.get(fromPhone);
+          const cachedGames = userGameCache.get(fromPhone) || [];
+          const dealCache = userDealCache.get(fromPhone);
 
-            if (['1', '2', '3', 'one', 'two', 'three'].includes(normalizedText)) {
-              messageText = `track ${normalizedText.replace(/[^0-9]/g, '')}`;
-            }
+          if (!activeSession && ['1', '2', '3', 'one', 'two', 'three'].includes(normalizedText)) {
+            messageText = dealCache?.deals?.length
+              ? `track ${NUMBER_SHORTCUTS[normalizedText] || normalizedText}`
+              : `game ${NUMBER_SHORTCUTS[normalizedText] || normalizedText}`;
+          }
 
-            if (['stop', 'cancel', 'unsubscribe'].includes(normalizedText)) {
-              trackSessions.delete(fromPhone);
-              await sendReply(fromPhone,
-                buildCancelledMessage(),
-                buildButtons(['New search'])
-              );
-              continue;
-            }
+          if (['stop', 'cancel', 'unsubscribe'].includes(normalizedText)) {
+            trackSessions.delete(fromPhone);
+            await sendReply(fromPhone, buildCancelledMessage(), buildButtons(['New search']));
+            continue;
+          }
 
-            const activeSession = trackSessions.get(fromPhone);
-            const cachedResults = userSearchCache.get(fromPhone) || [];
+          const gameMatch = messageText.match(SELECT_GAME_REGEX);
+          if (gameMatch) {
+            const chosen = cachedGames[Number(gameMatch[1]) - 1];
 
-            // ================= TRACK COMMAND =================
-            const trackMatch = messageText.match(TRACK_COMMAND_REGEX);
-
-            if (trackMatch) {
-              const index = trackMatch[1] ? Number(trackMatch[1]) - 1 : 0;
-              const chosen = cachedResults[index];
-
-              if (!chosen) {
-                await sendReply(fromPhone,
+            if (!chosen) {
+              await sendReply(
+                fromPhone,
                 formatMessage({
-                  title: 'No Results',
-                  body: 'Search first before tracking.'
+                  title: 'No Cached Games',
+                  body: 'Search for a game first, then choose one of the listed matches.'
                 }),
                 buildButtons(['New search'])
               );
-                continue;
-              }
-
-              trackSessions.set(fromPhone, {
-                state: 'action_selection',
-                product: chosen,
-                productName: chosen.title,
-                url: chosen.url,
-                basePrice: extractPriceFromResult(chosen)
-              });
-
-              await sendReply(fromPhone, buildProductInsightMessage(chosen), buildProductActionButtons());
               continue;
             }
 
-            // ================= ACTION SELECTION =================
-            if (activeSession?.state === 'action_selection') {
-              const normalized = messageText.toLowerCase();
+            await showGameDeals(fromPhone, chosen);
+            continue;
+          }
 
-              if (normalized.includes('start tracking')) {
-                trackSessions.set(fromPhone, {
-                  ...activeSession,
-                  state: 'awaiting_duration'
-                });
-
-                await sendReply(fromPhone, buildDurationPrompt(activeSession.product), buildButtons(['3 days', '7 days', 'Until price drops']));
-                continue;
-              }
-
-              if (normalized.includes('set target')) {
-                trackSessions.set(fromPhone, {
-                  ...activeSession,
-                  state: 'awaiting_target'
-                });
-
-                await sendReply(fromPhone, buildTargetPrompt(), buildButtons(['Skip']));
-                continue;
-              }
-
-              if (normalized === 'cancel') {
-                trackSessions.delete(fromPhone);
-                await sendReply(fromPhone, buildCancelledMessage());
-                continue;
-              }
-
-              await sendReply(fromPhone,
+          if (TRACK_ALL_REGEX.test(messageText)) {
+            if (!dealCache?.deals?.length) {
+              await sendReply(
+                fromPhone,
                 formatMessage({
-                  title: 'Choose an action',
-                  body: 'Use one of the buttons or reply with a valid option.'
-                }),
-                buildButtons(['Start Tracking', 'Set Target Price', 'Cancel'])
+                  title: 'No Deals Selected',
+                  body: 'Choose a game first, then I can track all available stores.'
+                })
               );
               continue;
             }
 
-            // ================= DURATION =================
-            if (activeSession?.state === 'awaiting_duration') {
-              const parsed = parseDurationChoice(messageText);
+            const session = buildTrackingSession({
+              fromPhone,
+              dealCache,
+              trackingScope: 'all_stores',
+              deals: dealCache.deals
+            });
 
-              if (!parsed) {
-                await sendReply(fromPhone,
-                  formatMessage({
-                    title: 'Invalid Choice',
-                    body: 'Please select a valid duration.'
-                  }),
-                  buildButtons(['3 days', '7 days', 'Until price drops'])
-                );
-                continue;
-              }
+            await sendReply(fromPhone, buildDurationPrompt(session), buildButtons(['3 days', '7 days', 'Until better deal']));
+            continue;
+          }
 
-              trackSessions.set(fromPhone, {
-                ...activeSession,
-                state: 'awaiting_target',
-                ...parsed
-              });
-
-              await sendReply(fromPhone,
+          const trackMatch = messageText.match(TRACK_COMMAND_REGEX);
+          if (trackMatch) {
+            if (!dealCache?.deals?.length) {
+              await sendReply(
+                fromPhone,
                 formatMessage({
-                  title: 'Set Target Price',
-                  body: 'Enter your desired price (₹) or skip.'
+                  title: 'No Deals Selected',
+                  body: 'Choose a game first, then choose a store deal to track.'
+                }),
+                buildButtons(['New search'])
+              );
+              continue;
+            }
+
+            const index = trackMatch[1] ? Number(trackMatch[1]) - 1 : 0;
+            const chosenDeal = dealCache.deals[index];
+
+            if (!chosenDeal) {
+              await sendReply(
+                fromPhone,
+                formatMessage({
+                  title: 'Invalid Deal',
+                  body: 'Choose one of the listed deal numbers.'
+                })
+              );
+              continue;
+            }
+
+            const session = buildTrackingSession({
+              fromPhone,
+              dealCache,
+              trackingScope: 'store_specific',
+              deals: [chosenDeal]
+            });
+
+            await sendReply(fromPhone, buildDurationPrompt(session), buildButtons(['3 days', '7 days', 'Until better deal']));
+            continue;
+          }
+
+          if (activeSession?.state === 'awaiting_duration') {
+            const parsed = parseDurationChoice(messageText);
+
+            if (!parsed) {
+              await sendReply(
+                fromPhone,
+                formatMessage({
+                  title: 'Invalid Choice',
+                  body: 'Please select a valid tracking duration.'
+                }),
+                buildButtons(['3 days', '7 days', 'Until better deal'])
+              );
+              continue;
+            }
+
+            trackSessions.set(fromPhone, {
+              ...activeSession,
+              state: 'awaiting_target',
+              ...parsed
+            });
+
+            await sendReply(fromPhone, buildTargetPrompt(), buildButtons(['Skip']));
+            continue;
+          }
+
+          if (activeSession?.state === 'awaiting_target') {
+            const skippedTarget = /^skip$/i.test(messageText);
+            const targetPrice = skippedTarget ? null : parseCurrencyNumber(messageText);
+
+            if (!skippedTarget && !targetPrice) {
+              await sendReply(
+                fromPhone,
+                formatMessage({
+                  title: 'Invalid Price',
+                  body: `Enter a valid ${TRACKING_CONFIG.defaultCurrency} price or reply Skip.`
                 }),
                 buildButtons(['Skip'])
               );
               continue;
             }
 
-            // ================= TARGET =================
-            if (activeSession?.state === 'awaiting_target') {
-              const targetPrice = /^skip$/i.test(messageText)
-                ? null
-                : parseCurrencyNumber(messageText);
+            await saveTrackingSession({ fromPhone, session: activeSession, targetPrice });
+            trackSessions.delete(fromPhone);
 
-              if (messageText.toLowerCase() !== 'skip' && !targetPrice) {
-                await sendReply(fromPhone,
-                  formatMessage({
-                    title: 'Invalid Price',
-                    body: 'Enter valid price or skip.'
-                  }),
-                  buildButtons(['Skip'])
-                );
-                continue;
-              }
+            await sendReply(
+              fromPhone,
+              formatMessage({
+                title: 'Tracking Started',
+                body:
+                  `${activeSession.gameTitle}\n` +
+                  `Stores tracked: ${activeSession.deals.length}\n\n` +
+                  'You will be notified when a better deal or target price is detected.'
+              }),
+              buildButtons(['New search'])
+            );
+            continue;
+          }
 
-              await TrackedProduct.findOneAndUpdate(
-                { userPhone: fromPhone, url: activeSession.url },
-                {
-                  userPhone: fromPhone,
-                  productName: activeSession.productName,
-                  url: activeSession.url,
-                  lastCheckedPrice: targetPrice || 0,
-                  targetPrice,
-                  isActive: true
-                },
-                { upsert: true }
-              );
+          const games = await searchGamesByTitle(messageText);
+          const topGames = games.slice(0, 3);
 
-              trackSessions.delete(fromPhone);
+          if (!topGames.length) {
+            await sendReply(
+              fromPhone,
+              formatMessage({
+                title: 'No Games Found',
+                body: 'I could not find matching games. Try the title again with fewer words.'
+              })
+            );
+            continue;
+          }
 
-              await sendReply(fromPhone,
-                formatMessage({
-                  title: 'Tracking Started',
-                  body: `📦 ${activeSession.productName}\n\nYou will be notified on price drop.`
-                }),
-                buildButtons(['View tracked items', 'New search'])
-              );
-              continue;
-            }
+          userGameCache.set(fromPhone, topGames);
+          userDealCache.delete(fromPhone);
 
-            // ================= SEARCH =================
-            const location = getLocation();
-            const refinedQuery = await refineQuery(messageText);
-            const searchResults = await searchWithLocation(refinedQuery, location);
-
-            if (searchResults?.results?.length) {
-              userSearchCache.set(fromPhone, searchResults.results);
-            }
-
-            const topOptions = (searchResults?.results || []).slice(0, 3);
-
-            const messageOut = formatMessage({
-              title: 'Top Deals Found',
-              body: topOptions
-                .map((item, i) => `${i + 1}. ${item.title}\n💰 ${item.price || 'N/A'}`)
-                .join('\n\n')
-            });
-
-            const trackButtons = topOptions.map((item, i) => ({
-              id: `track_${i + 1}`,
-              title: `Track ${i + 1}`
-            }));
-
-            await sendReply(fromPhone, messageOut, trackButtons);
+          await sendReply(
+            fromPhone,
+            buildGameSearchResultsMessage(topGames),
+            topGames.map((game, index) => ({
+              id: `game_${game.gameID}`,
+              title: `Game ${index + 1}`
+            }))
+          );
         }
       }
     }
   } catch (err) {
-    console.error(err);
+    console.error('Webhook handling error:', err.message);
   }
 };
 

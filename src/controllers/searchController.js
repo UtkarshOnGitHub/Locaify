@@ -1,47 +1,80 @@
-// Search Controller
-const { searchWithLocation } = require('../services/tavilyService');
-const { getLocation } = require('../services/locationService');
-const { refineQuery, formatSearchResults } = require('../services/groqService');
+const {
+  searchGamesByTitle,
+  getGameDetailsWithDeals,
+  getDealDetails,
+  getStores,
+  compareDeals
+} = require('../services/gameDealsApiService');
 
-/**
- * Handle search API requests with AI-powered query refinement
- */
-const handleSearch = async (req, res) => {
-  const query = req.query.q || 'default search';
-
-  // Get location (hardcoded to India)
-  const location = getLocation();
-
-  console.log(`\n🔍 Search API called`);
-  console.log(`   Query: "${query}"`);
-  console.log(`   Location: ${location.countryName}`);
-
+const handleGames = async (req, res) => {
   try {
-    // Step 1: Refine query using Groq LLM
-    const refinedQuery = await refineQuery(query);
-    
-    // Step 2: Search with Tavily using refined query
-    const results = await searchWithLocation(refinedQuery, location);
+    const { title, id } = req.query;
 
-    // Step 3: Format results nicely with both queries
-    const formattedResponse = await formatSearchResults(query, refinedQuery, results);
+    if (id) {
+      const game = await getGameDetailsWithDeals(id);
+      const comparison = compareDeals(game.deals);
+      return res.json({
+        game,
+        recommendation: comparison.bestDeal,
+        deals: comparison.deals
+      });
+    }
 
-    res.json({
-      originalQuery: query,
-      refinedQuery: refinedQuery,
-      location,
-      results: results,
-      formattedResponse: formattedResponse
-    });
+    if (!title) {
+      return res.status(400).json({
+        error: 'Missing query. Use ?title=game-title or ?id=gameID.'
+      });
+    }
+
+    const games = await searchGamesByTitle(title);
+    return res.json({ query: title, games });
   } catch (error) {
-    console.error('Search error:', error.message);
-    res.status(500).json({
-      query,
+    console.error('Game deal API error:', error.message);
+    return res.status(500).json({
       error: error.message
     });
   }
 };
 
+const handleDeal = async (req, res) => {
+  try {
+    const { id } = req.query;
+
+    if (!id) {
+      return res.status(400).json({ error: 'Missing query. Use ?id=dealID.' });
+    }
+
+    const deal = await getDealDetails(id);
+    return res.json({ deal });
+  } catch (error) {
+    console.error('Deal API error:', error.message);
+    return res.status(500).json({
+      error: error.message
+    });
+  }
+};
+
+const handleStores = async (req, res) => {
+  try {
+    const forceRefresh = String(req.query.refresh || 'false').toLowerCase() === 'true';
+    const stores = await getStores({ forceRefresh });
+    return res.json({ stores });
+  } catch (error) {
+    console.error('Stores API error:', error.message);
+    return res.status(500).json({
+      error: error.message
+    });
+  }
+};
+
+const handleSearch = async (req, res) => {
+  req.query.title = req.query.title || req.query.q;
+  return handleGames(req, res);
+};
+
 module.exports = {
-  handleSearch
+  handleSearch,
+  handleGames,
+  handleDeal,
+  handleStores
 };
