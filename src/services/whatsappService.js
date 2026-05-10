@@ -88,7 +88,7 @@ const sendReply = async (recipientPhone, replyText, buttons = null, options = {}
         }
       }
     );
-
+    console.log(JSON.stringify(payload));
     console.log(`WhatsApp reply sent to ${recipientPhone}`);
   } catch (error) {
     console.error('Failed to send WhatsApp reply.');
