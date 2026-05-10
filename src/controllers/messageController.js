@@ -243,30 +243,36 @@ const saveTrackingSession = async ({ fromPhone, session, targetPrice }) => {
   const trackingMode = session.trackingMode || 'duration';
   const expiresAt = getExpiryDate({ trackingMode, days: session.days });
 
-  for (const deal of session.deals) {
-    const baselinePrice = deal.price || targetPrice || 0;
+  // Always track a single deal — the best (cheapest) one from the session.
+  // For 'all_stores' scope the best deal is deals[0] (already sorted by price).
+  // For 'store_specific' scope there is exactly one deal in the array.
+  const deal = session.deals[0];
+  if (!deal) return;
 
-    await TrackedGame.findOneAndUpdate(
-      { userPhone: fromPhone, gameID: session.gameID, dealID: deal.dealID },
-      {
-        userPhone: fromPhone,
-        gameID: session.gameID,
-        dealID: deal.dealID,
-        gameTitle: session.gameTitle,
-        purchaseUrl: deal.purchaseUrl,
-        storeID: deal.storeID,
-        storeName: deal.storeName,
-        baselinePrice,
-        lastCheckedPrice: baselinePrice,
-        targetPrice,
-        trackingMode,
-        trackingScope: session.trackingScope,
-        expiresAt,
-        isActive: true
-      },
-      { upsert: true, setDefaultsOnInsert: true }
-    );
-  }
+  const baselinePrice = deal.price || targetPrice || 0;
+
+  await TrackedGame.findOneAndUpdate(
+    { userPhone: fromPhone, gameID: session.gameID },
+    {
+      userPhone: fromPhone,
+      gameID: session.gameID,
+      dealID: deal.dealID,
+      gameTitle: session.gameTitle,
+      purchaseUrl: deal.purchaseUrl,
+      storeID: deal.storeID,
+      storeName: deal.storeName,
+      baselinePrice,
+      lastCheckedPrice: baselinePrice,
+      targetPrice,
+      trackingMode,
+      trackingScope: session.trackingScope,
+      expiresAt,
+      isActive: true,
+      lastNotifiedPrice: null,
+      checkCount: 0
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -482,14 +488,18 @@ const handleWebhook = async (req, res) => {
             await saveTrackingSession({ fromPhone, session: activeSession, targetPrice: targetPriceUSD });
             trackSessions.delete(fromPhone);
 
-            const storeCount = activeSession.deals.length;
-            const targetLine = targetPriceINR ? `\nAlert when price drops below ₹${targetPriceINR.toLocaleString('en-IN')}` : '';
+            const scopeLabel = activeSession.trackingScope === 'all_stores'
+              ? 'across all stores'
+              : `on ${activeSession.deals[0]?.storeName || 'selected store'}`;
+            const targetLine = targetPriceINR
+              ? `\nAlert when price drops below ₹${targetPriceINR.toLocaleString('en-IN')}`
+              : '';
 
             await sendReply(
               fromPhone,
               `✅ *Tracking Started*\n\n` +
               `*${activeSession.gameTitle}*\n` +
-              `Monitoring ${storeCount} ${storeCount === 1 ? 'store' : 'stores'}` +
+              `Monitoring ${scopeLabel}` +
               targetLine +
               `\n\nI'll notify you when a better deal is found.`
             );

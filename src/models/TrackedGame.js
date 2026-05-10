@@ -36,6 +36,6 @@ const trackedGameSchema = new mongoose.Schema(
 );
 
 trackedGameSchema.index({ isActive: 1, expiresAt: 1 });
-trackedGameSchema.index({ userPhone: 1, gameID: 1, dealID: 1 }, { unique: true });
+trackedGameSchema.index({ userPhone: 1, gameID: 1 }, { unique: true });
 
 module.exports = mongoose.model('TrackedGame', trackedGameSchema);
