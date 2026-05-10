@@ -1,7 +1,7 @@
 {
   "name": "locaify",
   "version": "1.0.0",
-  "description": "WhatsApp bot with AI search using Tavily API",
+  "description": "Conversational game deal tracking assistant",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -9,9 +9,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@tavily/core": "^0.7.3",
     "axios": "^1.6.0",
-    "cheerio": "^1.2.0",
     "dotenv": "^16.0.0",
     "express": "^5.2.1",
     "mongoose": "^9.6.1",
