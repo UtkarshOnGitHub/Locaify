@@ -42,7 +42,13 @@ const runDealMonitoringCheck = async () => {
     .sort({ updatedAt: 1 });
 
   for (const track of tracks) {
-    const deal = await getDealDetails(track.dealID);
+    let deal;
+    try {
+      deal = await getDealDetails(track.dealID);
+    } catch (error) {
+      console.error(`Failed to fetch deal ${track.dealID}: ${error.message}`);
+      continue;
+    }
     const newPrice = deal.price;
 
     if (!Number.isFinite(newPrice)) {

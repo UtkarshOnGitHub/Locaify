@@ -305,7 +305,19 @@ const sendGameSearchPage = async (fromPhone, cache) => {
 };
 
 const showGameDeals = async (fromPhone, game) => {
-  const gameDetails = await getGameDetailsWithDeals(game.gameID);
+  let gameDetails;
+  try {
+    gameDetails = await getGameDetailsWithDeals(game.gameID);
+  } catch (error) {
+    await sendReply(
+      fromPhone,
+      formatMessage({
+        title: 'Error',
+        body: 'Sorry, I could not fetch deals right now. Please try again later.'
+      })
+    );
+    return;
+  }
   const comparison = compareDeals(gameDetails.deals);
   const topDeals = comparison.deals.slice(0, 3);
 

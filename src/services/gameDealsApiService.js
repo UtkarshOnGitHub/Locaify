@@ -58,7 +58,20 @@ const getStores = async ({ forceRefresh = false } = {}) => {
     return storeCache.stores;
   }
 
-  const response = await apiClient.get('/stores');
+  let response;
+  try {
+    response = await apiClient.get('/stores');
+  } catch (error) {
+    if (error.response?.status === 404) {
+      storeCache = {
+        expiresAt: now + STORE_CACHE_TTL_MS,
+        stores: [],
+        storeMap: new Map()
+      };
+      return [];
+    }
+    throw error;
+  }
   const stores = (response.data || []).map(normalizeStore);
 
   storeCache = {
@@ -161,27 +174,74 @@ const normalizeDealDetails = (payload, dealID, storeMap) => {
 };
 
 const searchGamesByTitle = async (title) => {
-  const response = await apiClient.get('/games', {
-    params: { title }
-  });
+  let response;
+  try {
+    response = await apiClient.get('/games', {
+      params: { title }
+    });
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return [];
+    }
+    throw error;
+  }
 
   return (response.data || []).map(normalizeGameSearchResult);
 };
 
 const getGameDetailsWithDeals = async (gameID) => {
-  const response = await apiClient.get('/games', {
-    params: { id: gameID }
-  });
-  const storeMap = await getStoreMap();
+  let response;
+  let storeMap;
+  try {
+    response = await apiClient.get('/games', {
+      params: { id: gameID }
+    });
+    storeMap = await getStoreMap();
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return {
+        gameID,
+        title: null,
+        steamAppID: null,
+        thumbnailUrl: null,
+        cheapestPriceEver: { price: null, date: null },
+        deals: []
+      };
+    }
+    throw error;
+  }
 
   return normalizeGameDetails(response.data, gameID, storeMap);
 };
 
 const getDealDetails = async (dealID) => {
-  const response = await apiClient.get('/deals', {
-    params: { id: dealID }
-  });
-  const storeMap = await getStoreMap();
+  let response;
+  let storeMap;
+  try {
+    response = await apiClient.get('/deals', {
+      params: { id: dealID }
+    });
+    storeMap = await getStoreMap();
+  } catch (error) {
+    if (error.response?.status === 404) {
+      return {
+        dealID,
+        gameID: null,
+        title: null,
+        storeID: null,
+        storeName: null,
+        store: null,
+        price: null,
+        retailPrice: null,
+        steamAppID: null,
+        thumbnailUrl: null,
+        purchaseUrl: null,
+        cheapestPriceEver: { price: null, date: null },
+        cheaperStores: []
+      };
+    }
+    throw error;
+  }
 
   return normalizeDealDetails(response.data, dealID, storeMap);
 };
