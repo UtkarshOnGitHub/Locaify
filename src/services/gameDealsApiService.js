@@ -99,7 +99,7 @@ const normalizeGameSearchResult = (game) => ({
   cheapestPrice: normalizePrice(game.cheapest),
   cheapestDealID: game.cheapestDealID,
   steamAppID: game.steamAppID || null,
-  thumbnailUrl: game.thumb || null
+  thumbnailUrl: buildImageUrl(game.thumb)
 });
 
 const normalizeGameDeal = (deal, storeMap) => ({
@@ -120,7 +120,7 @@ const normalizeGameDetails = (payload, gameID, storeMap) => {
     gameID,
     title: payload?.info?.title || null,
     steamAppID: payload?.info?.steamAppID || null,
-    thumbnailUrl: payload?.info?.thumb || null,
+    thumbnailUrl: buildImageUrl(payload?.info?.thumb),
     cheapestPriceEver: {
       price: normalizePrice(payload?.cheapestPriceEver?.price),
       date: payload?.cheapestPriceEver?.date ? new Date(payload.cheapestPriceEver.date * 1000) : null
@@ -142,7 +142,7 @@ const normalizeDealDetails = (payload, dealID, storeMap) => {
     price: normalizePrice(gameInfo.salePrice),
     retailPrice: normalizePrice(gameInfo.retailPrice),
     steamAppID: gameInfo.steamAppID || null,
-    thumbnailUrl: gameInfo.thumb || null,
+    thumbnailUrl: buildImageUrl(gameInfo.thumb),
     purchaseUrl: buildPurchaseUrl(dealID),
     cheapestPriceEver: {
       price: normalizePrice(payload?.cheapestPrice?.price),

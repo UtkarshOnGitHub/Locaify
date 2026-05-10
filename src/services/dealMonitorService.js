@@ -89,7 +89,7 @@ const runDealMonitoringCheck = async () => {
         });
       }
 
-      await sendReply(track.userPhone, message);
+      await sendReply(track.userPhone, message, null, { headerImageUrl: deal.thumbnailUrl });
     }
 
     const updates = {

@@ -36,9 +36,11 @@ const trackSessions = new Map();
 const processedMessageIds = new Set();
 const MAX_PROCESSED_MESSAGE_IDS = 1000;
 
-const SELECT_GAME_REGEX = /^(?:game|select)\s+([1-3])$/i;
+const SELECT_GAME_REGEX = /^(?:game|select)\s+([1-9])$/i;
 const TRACK_COMMAND_REGEX = /^track(?:\s+this)?(?:\s+(?:deal\s+)?([1-9]))?$/i;
 const TRACK_ALL_REGEX = /^track\s+all(?:\s+stores)?$/i;
+const MORE_GAMES_REGEX = /^(?:more|more games|show more|fetch more|more fetch)$/i;
+const GAME_PAGE_SIZE = 2;
 const NUMBER_SHORTCUTS = { one: '1', two: '2', three: '3' };
 
 const normalizeText = (text) => {
@@ -119,24 +121,70 @@ const formatHistoricalLow = (cheapestPriceEver) => {
   return `Historical low: ${formatPrice(cheapestPriceEver.price)} (${dateText})`;
 };
 
-const buildGameSearchResultsMessage = (games) => {
+const buildGameSearchResultsMessage = ({ games, offset, total }) => {
+  const from = total ? offset + 1 : 0;
+  const to = Math.min(offset + games.length, total);
+  const hasMore = offset + games.length < total;
+
   return formatMessage({
-    title: 'Matching Games',
-    body: games
-      .map((game, index) => (
-        `${index + 1}. ${game.title}\n` +
-        `Best seen now: ${formatPrice(game.cheapestPrice)}`
-      ))
-      .join('\n\n')
+    title: 'Choose A Game',
+    body: [
+      `Showing ${from}-${to} of ${total} matches`,
+      '',
+      ...games.map((game, index) => (
+        `${offset + index + 1}. ${game.title}\n` +
+        `Lowest listed price: ${formatPrice(game.cheapestPrice)}`
+      )),
+      '',
+      hasMore
+        ? 'Pick a game, or tap More Games to see more results.'
+        : 'Pick one of the listed games to continue.'
+    ].join('\n')
   });
 };
 
-const buildDealResultsMessage = ({ title, cheapestPriceEver, deals, bestDeal }) => {
+const buildGameButtons = ({ games, offset, total }) => {
+  const buttons = games.map((game, index) => ({
+    id: `game_${game.gameID}`,
+    title: `Game ${offset + index + 1}`
+  }));
+
+  if (offset + games.length < total) {
+    buttons.push({ id: 'more_games', title: 'More Games' });
+  }
+
+  return buildButtons(buttons);
+};
+
+const getNextGamePage = (cache) => {
+  if (!cache?.games?.length) return null;
+  const offset = cache.offset || 0;
+  const games = cache.games.slice(offset, offset + GAME_PAGE_SIZE);
+
+  return {
+    games,
+    offset,
+    total: cache.games.length
+  };
+};
+
+const advanceGamePage = (cache) => {
+  if (!cache?.games?.length) return null;
+  const nextOffset = Math.min((cache.offset || 0) + GAME_PAGE_SIZE, cache.games.length);
+
+  return {
+    ...cache,
+    offset: nextOffset >= cache.games.length ? 0 : nextOffset
+  };
+};
+
+const buildDealResultsMessage = ({ title, steamAppID, cheapestPriceEver, deals, bestDeal }) => {
   const dealLines = deals.slice(0, 3).map((deal, index) => (
     `${index + 1}. ${deal.storeName}\n` +
-    `Price: ${formatPrice(deal.price)}\n` +
-    `Discount: ${deal.savings}%\n` +
-    `Buy: ${deal.purchaseUrl}`
+    `   Current: ${formatPrice(deal.price)}\n` +
+    `   Retail: ${formatPrice(deal.retailPrice)}\n` +
+    `   Discount: ${deal.savings}%\n` +
+    `   Buy: ${deal.purchaseUrl}`
   ));
 
   const recommendation = bestDeal
@@ -147,12 +195,14 @@ const buildDealResultsMessage = ({ title, cheapestPriceEver, deals, bestDeal }) 
     title: title || 'Game Deals',
     body: [
       recommendation,
+      steamAppID ? `Steam App ID: ${steamAppID}` : null,
       formatHistoricalLow(cheapestPriceEver),
       '',
+      'Top Deals',
       ...dealLines,
       '',
-      'Reply Track All to monitor every listed store.'
-    ].join('\n')
+      'Choose Track All, or track one listed store.'
+    ].filter(Boolean).join('\n')
   });
 };
 
@@ -232,6 +282,28 @@ const saveTrackingSession = async ({ fromPhone, session, targetPrice }) => {
   }
 };
 
+const sendGameSearchPage = async (fromPhone, cache) => {
+  const page = getNextGamePage(cache);
+
+  if (!page?.games?.length) {
+    await sendReply(
+      fromPhone,
+      formatMessage({
+        title: 'No More Games',
+        body: 'I could not find more matches for that search.'
+      })
+    );
+    return;
+  }
+
+  await sendReply(
+    fromPhone,
+    buildGameSearchResultsMessage(page),
+    buildGameButtons(page),
+    { headerImageUrl: page.games[0]?.thumbnailUrl }
+  );
+};
+
 const showGameDeals = async (fromPhone, game) => {
   const gameDetails = await getGameDetailsWithDeals(game.gameID);
   const comparison = compareDeals(gameDetails.deals);
@@ -251,6 +323,7 @@ const showGameDeals = async (fromPhone, game) => {
   userDealCache.set(fromPhone, {
     gameID: game.gameID,
     gameTitle: gameDetails.title || game.title,
+    thumbnailUrl: gameDetails.thumbnailUrl || game.thumbnailUrl,
     deals: comparison.deals,
     cheapestPriceEver: gameDetails.cheapestPriceEver
   });
@@ -261,11 +334,13 @@ const showGameDeals = async (fromPhone, game) => {
     fromPhone,
     buildDealResultsMessage({
       title: gameDetails.title || game.title,
+      steamAppID: gameDetails.steamAppID,
       cheapestPriceEver: gameDetails.cheapestPriceEver,
       deals: topDeals,
       bestDeal: comparison.bestDeal
     }),
-    buildButtons(actionButtons)
+    buildButtons(actionButtons),
+    { headerImageUrl: gameDetails.thumbnailUrl || game.thumbnailUrl }
   );
 };
 
@@ -307,10 +382,14 @@ const handleWebhook = async (req, res) => {
 
           const normalizedText = normalizeText(messageText);
           const activeSession = trackSessions.get(fromPhone);
-          const cachedGames = userGameCache.get(fromPhone) || [];
+          const gameCache = userGameCache.get(fromPhone);
+          const cachedGames = gameCache?.games || [];
           const dealCache = userDealCache.get(fromPhone);
 
-          if (!activeSession && ['1', '2', '3', 'one', 'two', 'three'].includes(normalizedText)) {
+          if (
+            !activeSession &&
+            (/^[1-9]$/.test(normalizedText) || ['one', 'two', 'three'].includes(normalizedText))
+          ) {
             messageText = dealCache?.deals?.length
               ? `track ${NUMBER_SHORTCUTS[normalizedText] || normalizedText}`
               : `game ${NUMBER_SHORTCUTS[normalizedText] || normalizedText}`;
@@ -319,6 +398,25 @@ const handleWebhook = async (req, res) => {
           if (['stop', 'cancel', 'unsubscribe'].includes(normalizedText)) {
             trackSessions.delete(fromPhone);
             await sendReply(fromPhone, buildCancelledMessage(), buildButtons(['New search']));
+            continue;
+          }
+
+          if (MORE_GAMES_REGEX.test(messageText)) {
+            const nextCache = advanceGamePage(gameCache);
+
+            if (!nextCache) {
+              await sendReply(
+                fromPhone,
+                formatMessage({
+                  title: 'No Search Active',
+                  body: 'Search for a game first, then I can show more matches.'
+                })
+              );
+              continue;
+            }
+
+            userGameCache.set(fromPhone, nextCache);
+            await sendGameSearchPage(fromPhone, nextCache);
             continue;
           }
 
@@ -463,9 +561,14 @@ const handleWebhook = async (req, res) => {
           }
 
           const games = await searchGamesByTitle(messageText);
-          const topGames = games.slice(0, 3);
+          const gameCacheForUser = {
+            query: messageText,
+            games,
+            offset: 0
+          };
+          const firstPage = getNextGamePage(gameCacheForUser);
 
-          if (!topGames.length) {
+          if (!firstPage?.games?.length) {
             await sendReply(
               fromPhone,
               formatMessage({
@@ -476,17 +579,10 @@ const handleWebhook = async (req, res) => {
             continue;
           }
 
-          userGameCache.set(fromPhone, topGames);
+          userGameCache.set(fromPhone, gameCacheForUser);
           userDealCache.delete(fromPhone);
 
-          await sendReply(
-            fromPhone,
-            buildGameSearchResultsMessage(topGames),
-            topGames.map((game, index) => ({
-              id: `game_${game.gameID}`,
-              title: `Game ${index + 1}`
-            }))
-          );
+          await sendGameSearchPage(fromPhone, gameCacheForUser);
         }
       }
     }

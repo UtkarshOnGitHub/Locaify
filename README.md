@@ -8,6 +8,8 @@ Locaify is being reshaped into a conversational game deal assistant. The app now
 - Game lookup by title through CheapShark
 - Game details with all store deals, discounts, deal IDs, and historical low
 - Store metadata lookup for real store names and images
+- Image-led WhatsApp result cards using game thumbnails
+- Paginated game matching with a More Games action
 - Mongo-backed tracking records keyed by `gameID` and `dealID`
 - Scheduled background checks using the specific deal endpoint
 - WhatsApp alerts when a tracked deal improves or hits a target price

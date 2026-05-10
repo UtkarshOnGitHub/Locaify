@@ -7,7 +7,17 @@ const truncateText = (text, maxLength) => {
   return `${text.slice(0, maxLength - 3)}...`;
 };
 
-const sendReply = async (recipientPhone, replyText, buttons = null) => {
+const buildButtonPayload = (buttons) => {
+  return buttons.slice(0, 3).map((btn, index) => ({
+    type: 'reply',
+    reply: {
+      id: btn.id || `btn_${index}`,
+      title: truncateText(btn.title, 20)
+    }
+  }));
+};
+
+const sendReply = async (recipientPhone, replyText, buttons = null, options = {}) => {
   try {
     if (!GENERAL_TOKEN) {
       console.error('GENERAL_TOKEN is not set in environment variables.');
@@ -28,18 +38,32 @@ const sendReply = async (recipientPhone, replyText, buttons = null) => {
         type: 'interactive',
         interactive: {
           type: 'button',
+          ...(options.headerImageUrl
+            ? {
+                header: {
+                  type: 'image',
+                  image: {
+                    link: options.headerImageUrl
+                  }
+                }
+              }
+            : {}),
           body: {
             text: buttonBody
           },
           action: {
-            buttons: buttons.slice(0, 3).map((btn, index) => ({
-              type: 'reply',
-              reply: {
-                id: btn.id || `btn_${index}`,
-                title: truncateText(btn.title, 20)
-              }
-            }))
+            buttons: buildButtonPayload(buttons)
           }
+        }
+      };
+    } else if (options.headerImageUrl) {
+      payload = {
+        messaging_product: 'whatsapp',
+        to: recipientPhone,
+        type: 'image',
+        image: {
+          link: options.headerImageUrl,
+          caption: truncateText(replyText, 1024)
         }
       };
     } else {
@@ -86,33 +110,33 @@ const formatStore = (storeName) => {
 
 const buildBetterDealMessage = ({ gameTitle, storeName, oldPrice, newPrice, url, currency = 'USD' }) => {
   return (
-    `Better Deal Alert\n\n` +
-    `${gameTitle}\n` +
+    `*Better Deal Found*\n\n` +
+    `Game: ${gameTitle}\n` +
     formatStore(storeName) +
-    `Now: ${currency} ${newPrice}\n` +
-    `Before: ${currency} ${oldPrice}\n\n` +
-    `Buy now: ${url}`
+    `New price: ${currency} ${newPrice}\n` +
+    `Previous price: ${currency} ${oldPrice}\n\n` +
+    `Buy link:\n${url}`
   );
 };
 
 const buildTargetHitMessage = ({ gameTitle, storeName, targetPrice, newPrice, url, currency = 'USD' }) => {
   return (
-    `Target Price Hit\n\n` +
-    `${gameTitle}\n` +
+    `*Target Price Hit*\n\n` +
+    `Game: ${gameTitle}\n` +
     formatStore(storeName) +
     `Current: ${currency} ${newPrice}\n` +
     `Target: ${currency} ${targetPrice}\n\n` +
-    `Check deal: ${url}`
+    `Buy link:\n${url}`
   );
 };
 
 const buildDealHeartbeatMessage = ({ gameTitle, storeName, newPrice, url, currency = 'USD' }) => {
   return (
-    `Deal Update\n\n` +
-    `${gameTitle}\n` +
+    `*Deal Update*\n\n` +
+    `Game: ${gameTitle}\n` +
     formatStore(storeName) +
     `Current price: ${currency} ${newPrice}\n\n` +
-    `Link: ${url}`
+    `Buy link:\n${url}`
   );
 };
 

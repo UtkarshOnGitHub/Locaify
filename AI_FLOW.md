@@ -9,12 +9,12 @@ Locaify is moving into a personal game deal assistant. Lookup and tracking now u
 ```text
 User enters game name
   -> GET /api/1.0/games?title={gameName}
-  -> Show matching games
+  -> Show matching games with thumbnail and More Games action
   -> User selects a game
   -> GET /api/1.0/games?id={gameID}
   -> GET /api/1.0/stores
   -> Compare all available deals
-  -> Show best deal, discounts, historical low, and purchase links
+  -> Show thumbnail, best deal, discounts, historical low, and purchase links
   -> User chooses Track All or Track N
   -> Store gameID/dealID tracking records
   -> Cron calls GET /api/1.0/deals?id={dealID}
