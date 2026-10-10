@@ -23,7 +23,7 @@ Availability
 User preference for a specific platform/store
 
 After seeing the results, the user should have multiple options:
-
+Webhook handling error: Request failed with status code 400
 Buy immediately using the direct store link
 Track the game price across all stores
 Track the game only on a selected store/platform

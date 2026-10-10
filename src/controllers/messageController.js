@@ -110,6 +110,18 @@ const rememberProcessedMessage = (messageId) => {
   processedMessageIds.delete(processedMessageIds.values().next().value);
 };
 
+const logWebhookError = (error) => {
+  console.error('Webhook handling error:', error.message);
+  if (error.status) {
+    console.error('Upstream status:', error.status);
+  }
+  if (error.responseData) {
+    console.error('Upstream response:', error.responseData);
+  } else if (error.response?.data) {
+    console.error('Upstream response:', error.response.data);
+  }
+};
+
 const getMessageText = (message) => {
   if (message.type === 'text') return (message.text?.body || '').trim();
   if (message.type === 'interactive') {
@@ -536,7 +548,7 @@ const handleWebhook = async (req, res) => {
       }
     }
   } catch (err) {
-    console.error('Webhook handling error:', err.message);
+    logWebhookError(err);
   }
 };
 

@@ -7,11 +7,40 @@ const apiClient = axios.create({
 });
 
 const CHEAPSHARK_ORIGIN = 'https://www.cheapshark.com';
+const MAX_SEARCH_TITLE_LENGTH = 120;
 const STORE_CACHE_TTL_MS = 60 * 60 * 1000;
 let storeCache = {
   expiresAt: 0,
   stores: [],
   storeMap: new Map()
+};
+
+const normalizeQueryValue = (value) => String(value || '').trim();
+
+const buildApiError = (error, context) => {
+  if (!axios.isAxiosError(error)) return error;
+
+  const status = error.response?.status;
+  const responseMessage =
+    error.response?.data?.message ||
+    error.response?.data?.error ||
+    (typeof error.response?.data === 'string' ? error.response.data : null);
+
+  const apiError = new Error(
+    `${context} ${status ? `failed with status ${status}` : 'failed'}${responseMessage ? `: ${responseMessage}` : ''}`
+  );
+  apiError.status = status;
+  apiError.responseData = error.response?.data;
+  apiError.cause = error;
+  return apiError;
+};
+
+const requestCheapShark = async (path, config = {}) => {
+  try {
+    return await apiClient.get(path, config);
+  } catch (error) {
+    throw buildApiError(error, `CheapShark ${path} request`);
+  }
 };
 
 const normalizePrice = (value) => {
@@ -58,7 +87,7 @@ const getStores = async ({ forceRefresh = false } = {}) => {
     return storeCache.stores;
   }
 
-  const response = await apiClient.get('/stores');
+  const response = await requestCheapShark('/stores');
   const stores = (response.data || []).map(normalizeStore);
 
   storeCache = {
@@ -161,36 +190,49 @@ const normalizeDealDetails = (payload, dealID, storeMap) => {
 };
 
 const searchGamesByTitle = async (title) => {
-  const response = await apiClient.get('/games', {
-    params: { title }
+  const normalizedTitle = normalizeQueryValue(title).slice(0, MAX_SEARCH_TITLE_LENGTH);
+  if (!normalizedTitle) return [];
+
+  const response = await requestCheapShark('/games', {
+    params: { title: normalizedTitle }
   });
 
   return (response.data || []).map(normalizeGameSearchResult);
 };
 
 const getGameDetailsWithDeals = async (gameID) => {
-  const response = await apiClient.get('/games', {
-    params: { id: gameID }
+  const normalizedGameID = normalizeQueryValue(gameID);
+  if (!normalizedGameID) {
+    throw new Error('Game ID is required to fetch game details.');
+  }
+
+  const response = await requestCheapShark('/games', {
+    params: { id: normalizedGameID }
   });
   const storeMap = await getStoreMap();
 
-  return normalizeGameDetails(response.data, gameID, storeMap);
+  return normalizeGameDetails(response.data, normalizedGameID, storeMap);
 };
 
 const getDealDetails = async (dealID) => {
+  const normalizedDealID = normalizeQueryValue(dealID);
+  if (!normalizedDealID) {
+    throw new Error('Deal ID is required to fetch deal details.');
+  }
+
   // dealID from CheapShark is already URL-encoded (e.g. contains %3D).
   // Passing it through axios `params` would double-encode it (%3D → %253D),
   // causing a 404. Decode first so axios re-encodes it back to the correct form.
-  const decodedDealID = decodeURIComponent(dealID);
+  const decodedDealID = decodeURIComponent(normalizedDealID);
   const builtUrl = `${CHEAPSHARK_API_BASE_URL}/deals?id=${encodeURIComponent(decodedDealID)}`;
   console.log(`[getDealDetails] Requesting: ${builtUrl}`);
 
-  const response = await apiClient.get('/deals', {
+  const response = await requestCheapShark('/deals', {
     params: { id: decodedDealID }
   });
   const storeMap = await getStoreMap();
 
-  return normalizeDealDetails(response.data, dealID, storeMap);
+  return normalizeDealDetails(response.data, normalizedDealID, storeMap);
 };
 
 const compareDeals = (deals = []) => {

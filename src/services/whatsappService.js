@@ -9,6 +9,15 @@ const truncateText = (text, maxLength) => {
   return `${text.slice(0, maxLength - 3)}...`;
 };
 
+const isHttpsUrl = (value) => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:';
+  } catch (_error) {
+    return false;
+  }
+};
+
 const postToWhatsApp = async (payload) => {
   if (!GENERAL_TOKEN) {
     console.error('GENERAL_TOKEN is not set in environment variables.');
@@ -87,7 +96,10 @@ const sendImageReply = async (recipientPhone, imageUrl, bodyText, buttons = []) 
   try {
     const body = truncateText(bodyText, 1024);
 
-    if (!imageUrl) {
+    if (!isHttpsUrl(imageUrl)) {
+      if (imageUrl) {
+        console.warn(`Skipping WhatsApp image header because URL is not HTTPS: ${imageUrl}`);
+      }
       return sendReply(recipientPhone, body, buttons);
     }
 
