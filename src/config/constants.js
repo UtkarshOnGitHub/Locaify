@@ -9,7 +9,7 @@ module.exports = {
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/locaify',
   
   // Phone configuration
-  PHONE_NUMBER_ID: '1053035681233537',
+  PHONE_NUMBER_ID: process.env.PHONE_NUMBER_ID,
   GRAPH_API_VERSION: 'v25.0',
   
   // Groq configuration reserved for future conversational intent parsing
