@@ -1,7 +1,12 @@
 const axios = require('axios');
-const { GENERAL_TOKEN, PHONE_NUMBER_ID, GRAPH_API_VERSION } = require('../config/constants');
+const {
+  GENERAL_TOKEN,
+  PHONE_NUMBER_ID,
+  WHATSAPP_GRAPH_API_BASE_URL,
+  GRAPH_API_VERSION
+} = require('../config/constants');
 
-const GRAPH_API_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`;
+const GRAPH_API_URL = `${WHATSAPP_GRAPH_API_BASE_URL}/${GRAPH_API_VERSION}/${PHONE_NUMBER_ID}/messages`;
 
 const truncateText = (text, maxLength) => {
   if (!text) return '';
@@ -21,15 +26,20 @@ const isHttpsUrl = (value) => {
 const postToWhatsApp = async (payload) => {
   if (!GENERAL_TOKEN) {
     console.error('GENERAL_TOKEN is not set in environment variables.');
-    return;
+    return false;
+  }
+  if (!PHONE_NUMBER_ID) {
+    console.error('PHONE_NUMBER_ID is not set in environment variables.');
+    return false;
   }
 
-  await axios.post(GRAPH_API_URL, payload, {
+  const response = await axios.post(GRAPH_API_URL, payload, {
     headers: {
       Authorization: `Bearer ${GENERAL_TOKEN}`,
       'Content-Type': 'application/json'
     }
   });
+  return response.data || true;
 };
 
 /**
@@ -75,12 +85,16 @@ const sendReply = async (recipientPhone, replyText, buttons = null) => {
       };
     }
 
-    await postToWhatsApp(payload);
-    console.log(`WhatsApp reply sent to ${recipientPhone}`);
+    const result = await postToWhatsApp(payload);
+    if (result) {
+      console.log(`WhatsApp reply sent to ${recipientPhone}`);
+    }
+    return Boolean(result);
   } catch (error) {
     console.error('Failed to send WhatsApp reply.');
     console.error('Status:', error.response?.status);
     console.error('Error:', error.response?.data || error.message);
+    return false;
   }
 };
 
@@ -126,14 +140,17 @@ const sendImageReply = async (recipientPhone, imageUrl, bodyText, buttons = []) 
       }
     };
 
-    await postToWhatsApp(payload);
-    console.log(`WhatsApp image reply sent to ${recipientPhone}`);
+    const result = await postToWhatsApp(payload);
+    if (result) {
+      console.log(`WhatsApp image reply sent to ${recipientPhone}`);
+    }
+    return Boolean(result);
   } catch (error) {
     console.error('Failed to send WhatsApp image reply.');
     console.error('Status:', error.response?.status);
     console.error('Error:', error.response?.data || error.message);
     // Fallback to plain text if image send fails
-    await sendReply(recipientPhone, bodyText, buttons);
+    return sendReply(recipientPhone, bodyText, buttons);
   }
 };
 

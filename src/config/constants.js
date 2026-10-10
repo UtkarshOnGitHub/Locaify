@@ -10,6 +10,7 @@ module.exports = {
   
   // Phone configuration
   PHONE_NUMBER_ID: process.env.PHONE_NUMBER_ID,
+  WHATSAPP_GRAPH_API_BASE_URL: process.env.WHATSAPP_GRAPH_API_BASE_URL || 'https://graph.facebook.com',
   GRAPH_API_VERSION: 'v25.0',
   
   // Groq configuration reserved for future conversational intent parsing

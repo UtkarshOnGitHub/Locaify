@@ -347,6 +347,12 @@ const handleWebhook = async (req, res) => {
 
   try {
     const entries = req.body.entry || [];
+    const messageCount = entries.reduce((total, entry) => {
+      return total + (entry.changes || []).reduce((changeTotal, change) => {
+        return changeTotal + (change.value?.messages || []).length;
+      }, 0);
+    }, 0);
+    console.log(`WhatsApp webhook received: ${messageCount} message(s)`);
 
     for (const entry of entries) {
       for (const change of entry.changes || []) {
@@ -357,12 +363,17 @@ const handleWebhook = async (req, res) => {
             console.log(`Skipping duplicate webhook message: ${message.id}`);
             continue;
           }
-          rememberProcessedMessage(message.id);
 
           const fromPhone = message.from;
           const messageText = getMessageText(message);
 
-          if (!fromPhone || !messageText) continue;
+          if (!fromPhone || !messageText) {
+            console.log(`Skipping webhook message without sender/text. type=${message.type || 'unknown'}`);
+            rememberProcessedMessage(message.id);
+            continue;
+          }
+          console.log(`Processing WhatsApp ${message.type} message from ${fromPhone}: "${messageText}"`);
+          rememberProcessedMessage(message.id);
 
           receivedMessages.push(new Message({
             messageId: message.id,
