@@ -1,9 +1,12 @@
 const axios = require('axios');
-const { CHEAPSHARK_API_BASE_URL } = require('../config/constants');
+const { CHEAPSHARK_API_BASE_URL, CHEAPSHARK_USER_AGENT } = require('../config/constants');
 
 const apiClient = axios.create({
   baseURL: CHEAPSHARK_API_BASE_URL,
-  timeout: 12000
+  timeout: 12000,
+  headers: {
+    'User-Agent': CHEAPSHARK_USER_AGENT
+  }
 });
 
 const CHEAPSHARK_ORIGIN = 'https://www.cheapshark.com';

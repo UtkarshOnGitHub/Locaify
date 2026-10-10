@@ -4,6 +4,7 @@ module.exports = {
   VERIFY_TOKEN: process.env.VERIFY_TOKEN,
   GENERAL_TOKEN: (process.env.GENERAL_TOKEN || '').trim(),
   CHEAPSHARK_API_BASE_URL: process.env.CHEAPSHARK_API_BASE_URL || 'https://www.cheapshark.com/api/1.0',
+  CHEAPSHARK_USER_AGENT: process.env.CHEAPSHARK_USER_AGENT || 'Locaify/1.0 (game-deal-tracking-assistant)',
   GROQ_API_KEY: process.env.GROQ_API_KEY,
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/locaify',
   
